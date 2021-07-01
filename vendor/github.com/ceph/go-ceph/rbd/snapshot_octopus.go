@@ -1,6 +1,7 @@
 // +build !nautilus
 // These snapshot APIs are not available in the RHCS build used by OCS.
 // +build rhcs_next
+
 package rbd
 
 // #cgo LDFLAGS: -lrbd
