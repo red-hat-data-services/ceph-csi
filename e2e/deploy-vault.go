@@ -22,7 +22,14 @@ var (
 func deployVault(c kubernetes.Interface, deployTimeout int) {
 	// hack to make helm E2E pass as helm charts creates this configmap as part
 	// of cephcsi deployment
-	_, err := framework.RunKubectl(cephCSINamespace, "delete", "cm", "ceph-csi-encryption-kms-config", "--namespace", cephCSINamespace, "--ignore-not-found=true")
+	_, err := framework.RunKubectl(
+		cephCSINamespace,
+		"delete",
+		"cm",
+		"ceph-csi-encryption-kms-config",
+		"--namespace",
+		cephCSINamespace,
+		"--ignore-not-found=true")
 	Expect(err).Should(BeNil())
 
 	createORDeleteVault("create")
@@ -34,7 +41,7 @@ func deployVault(c kubernetes.Interface, deployTimeout int) {
 	Expect(err).Should(BeNil())
 	Expect(len(pods.Items)).Should(Equal(1))
 	name := pods.Items[0].Name
-	err = waitForPodInRunningState(name, cephCSINamespace, c, deployTimeout)
+	err = waitForPodInRunningState(name, cephCSINamespace, c, deployTimeout, noError)
 	Expect(err).Should(BeNil())
 }
 

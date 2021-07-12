@@ -32,12 +32,14 @@ import (
 
 	"github.com/ceph/go-ceph/rados"
 	librbd "github.com/ceph/go-ceph/rbd"
+	"github.com/ceph/go-ceph/rbd/admin"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/timestamp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/cloud-provider/volume/helpers"
+	mount "k8s.io/mount-utils"
 )
 
 const (
@@ -56,8 +58,17 @@ const (
 	rbdTaskRemoveCmdInvalidString2      = "Error EINVAL: invalid command"
 	rbdTaskRemoveCmdAccessDeniedMessage = "Error EACCES:"
 
-	// image metadata key for thick-provisioning
-	thickProvisionMetaKey = ".rbd.csi.ceph.com/thick-provisioned"
+	// image metadata key for thick-provisioning.
+	// As image metadata key starting with '.rbd' will not be copied when we do
+	// clone or mirroring, deprecating the old key for the same reason use
+	// 'thickProvisionMetaKey' to set image metadata.
+	deprecatedthickProvisionMetaKey = ".rbd.csi.ceph.com/thick-provisioned"
+	thickProvisionMetaKey           = "rbd.csi.ceph.com/thick-provisioned"
+
+	// these are the metadata set on the image to identify the image is
+	// thick provisioned or thin provisioned.
+	thickProvisionMetaData = "true"
+	thinProvisionMetaData  = "false"
 )
 
 // rbdImage contains common attributes and methods for the rbdVolume and
@@ -448,13 +459,36 @@ func (rv *rbdVolume) isInUse() (bool, error) {
 	return len(watchers) > defaultWatchers, nil
 }
 
+// checkImageFeatures check presence of imageFeatures parameter. It returns true when
+// there imageFeatures is missing or empty, skips missing parameter for non-static volumes
+// for backward compatibility.
+func checkImageFeatures(imageFeatures string, ok, static bool) bool {
+	return static && (!ok || imageFeatures == "")
+}
+
+// isNotMountPoint checks whether MountPoint does not exists and
+// also discards error indicating mountPoint exists.
+func isNotMountPoint(mounter mount.Interface, stagingTargetPath string) (bool, error) {
+	isNotMnt, err := mount.IsNotMountPoint(mounter, stagingTargetPath)
+	if os.IsNotExist(err) {
+		err = nil
+	}
+	return isNotMnt, err
+}
+
 // addRbdManagerTask adds a ceph manager task to execute command
 // asynchronously. If command is not found returns a bool set to false
 // example arg ["trash", "remove","pool/image"].
 func addRbdManagerTask(ctx context.Context, pOpts *rbdVolume, arg []string) (bool, error) {
 	args := []string{"rbd", "task", "add"}
 	args = append(args, arg...)
-	util.DebugLog(ctx, "executing %v for image (%s) using mon %s, pool %s", args, pOpts.RbdImageName, pOpts.Monitors, pOpts.Pool)
+	util.DebugLog(
+		ctx,
+		"executing %v for image (%s) using mon %s, pool %s",
+		args,
+		pOpts.RbdImageName,
+		pOpts.Monitors,
+		pOpts.Pool)
 	supported := true
 	_, stderr, err := util.ExecCommand(ctx, "ceph", args...)
 
@@ -462,7 +496,11 @@ func addRbdManagerTask(ctx context.Context, pOpts *rbdVolume, arg []string) (boo
 		switch {
 		case strings.Contains(stderr, rbdTaskRemoveCmdInvalidString1) &&
 			strings.Contains(stderr, rbdTaskRemoveCmdInvalidString2):
-			util.WarningLog(ctx, "cluster with cluster ID (%s) does not support Ceph manager based rbd commands (minimum ceph version required is v14.2.3)", pOpts.ClusterID)
+			util.WarningLog(
+				ctx,
+				"cluster with cluster ID (%s) does not support Ceph manager based rbd commands"+
+					"(minimum ceph version required is v14.2.3)",
+				pOpts.ClusterID)
 			supported = false
 		case strings.HasPrefix(stderr, rbdTaskRemoveCmdAccessDeniedMessage):
 			util.WarningLog(ctx, "access denied to Ceph MGR-based rbd commands on cluster ID (%s)", pOpts.ClusterID)
@@ -577,7 +615,11 @@ type trashSnapInfo struct {
 	origSnapName string
 }
 
-func flattenClonedRbdImages(ctx context.Context, snaps []librbd.SnapInfo, pool, monitors, rbdImageName string, cr *util.Credentials) error {
+func flattenClonedRbdImages(
+	ctx context.Context,
+	snaps []librbd.SnapInfo,
+	pool, monitors, rbdImageName string,
+	cr *util.Credentials) error {
 	rv := &rbdVolume{}
 	rv.Monitors = monitors
 	rv.Pool = pool
@@ -618,7 +660,11 @@ func flattenClonedRbdImages(ctx context.Context, snaps []librbd.SnapInfo, pool, 
 	return nil
 }
 
-func (rv *rbdVolume) flattenRbdImage(ctx context.Context, cr *util.Credentials, forceFlatten bool, hardlimit, softlimit uint) error {
+func (rv *rbdVolume) flattenRbdImage(
+	ctx context.Context,
+	cr *util.Credentials,
+	forceFlatten bool,
+	hardlimit, softlimit uint) error {
 	var depth uint
 	var err error
 
@@ -628,7 +674,13 @@ func (rv *rbdVolume) flattenRbdImage(ctx context.Context, cr *util.Credentials, 
 		if err != nil {
 			return err
 		}
-		util.ExtendedLog(ctx, "clone depth is (%d), configured softlimit (%d) and hardlimit (%d) for %s", depth, softlimit, hardlimit, rv)
+		util.ExtendedLog(
+			ctx,
+			"clone depth is (%d), configured softlimit (%d) and hardlimit (%d) for %s",
+			depth,
+			softlimit,
+			hardlimit,
+			rv)
 	}
 
 	if !forceFlatten && (depth < hardlimit) && (depth < softlimit) {
@@ -651,7 +703,10 @@ func (rv *rbdVolume) flattenRbdImage(ctx context.Context, cr *util.Credentials, 
 		}
 	}
 	if !supported {
-		util.ErrorLog(ctx, "task manager does not support flatten,image will be flattened once hardlimit is reached: %v", err)
+		util.ErrorLog(
+			ctx,
+			"task manager does not support flatten,image will be flattened once hardlimit is reached: %v",
+			err)
 		if forceFlatten || depth >= hardlimit {
 			err = rv.Connect(cr)
 			if err != nil {
@@ -751,7 +806,12 @@ func (rv *rbdVolume) checkImageChainHasFeature(ctx context.Context, feature uint
 
 // genSnapFromSnapID generates a rbdSnapshot structure from the provided identifier, updating
 // the structure with elements from on-disk snapshot metadata as well.
-func genSnapFromSnapID(ctx context.Context, rbdSnap *rbdSnapshot, snapshotID string, cr *util.Credentials, secrets map[string]string) error {
+func genSnapFromSnapID(
+	ctx context.Context,
+	rbdSnap *rbdSnapshot,
+	snapshotID string,
+	cr *util.Credentials,
+	secrets map[string]string) error {
 	var (
 		options map[string]string
 		vi      util.CSIIdentifier
@@ -835,7 +895,11 @@ func genSnapFromSnapID(ctx context.Context, rbdSnap *rbdSnapshot, snapshotID str
 }
 
 // generateVolumeFromVolumeID generates a rbdVolume structure from the provided identifier.
-func generateVolumeFromVolumeID(ctx context.Context, volumeID string, cr *util.Credentials, secrets map[string]string) (*rbdVolume, error) {
+func generateVolumeFromVolumeID(
+	ctx context.Context,
+	volumeID string,
+	cr *util.Credentials,
+	secrets map[string]string) (*rbdVolume, error) {
 	var (
 		options map[string]string
 		vi      util.CSIIdentifier
@@ -926,9 +990,14 @@ func generateVolumeFromVolumeID(ctx context.Context, volumeID string, cr *util.C
 
 // genVolFromVolID generates a rbdVolume structure from the provided identifier, updating
 // the structure with elements from on-disk image metadata as well.
-func genVolFromVolID(ctx context.Context, volumeID string, cr *util.Credentials, secrets map[string]string) (*rbdVolume, error) {
+func genVolFromVolID(
+	ctx context.Context,
+	volumeID string,
+	cr *util.Credentials,
+	secrets map[string]string) (*rbdVolume, error) {
 	vol, err := generateVolumeFromVolumeID(ctx, volumeID, cr, secrets)
-	if !errors.Is(err, util.ErrKeyNotFound) && !errors.Is(err, util.ErrPoolNotFound) && !errors.Is(err, ErrImageNotFound) {
+	if !errors.Is(err, util.ErrKeyNotFound) && !errors.Is(err, util.ErrPoolNotFound) &&
+		!errors.Is(err, ErrImageNotFound) {
 		return vol, err
 	}
 
@@ -956,7 +1025,10 @@ func genVolFromVolID(ctx context.Context, volumeID string, cr *util.Credentials,
 	return vol, err
 }
 
-func genVolFromVolumeOptions(ctx context.Context, volOptions, credentials map[string]string, disableInUseChecks bool) (*rbdVolume, error) {
+func genVolFromVolumeOptions(
+	ctx context.Context,
+	volOptions, credentials map[string]string,
+	disableInUseChecks bool) (*rbdVolume, error) {
 	var (
 		ok         bool
 		err        error
@@ -994,7 +1066,12 @@ func genVolFromVolumeOptions(ctx context.Context, volOptions, credentials map[st
 		return nil, err
 	}
 
-	util.ExtendedLog(ctx, "setting disableInUseChecks: %t image features: %v mounter: %s", disableInUseChecks, rbdVol.imageFeatureSet.Names(), rbdVol.Mounter)
+	util.ExtendedLog(
+		ctx,
+		"setting disableInUseChecks: %t image features: %v mounter: %s",
+		disableInUseChecks,
+		rbdVol.imageFeatureSet.Names(),
+		rbdVol.Mounter)
 	rbdVol.DisableInUseChecks = disableInUseChecks
 
 	err = rbdVol.initKMS(ctx, volOptions, credentials)
@@ -1010,7 +1087,7 @@ func (rv *rbdVolume) validateImageFeatures(imageFeatures string) error {
 	// the Go split function would return a single item array with
 	// an empty string, causing a failure when trying to validate
 	// the features.
-	if strings.TrimSpace(imageFeatures) == "" {
+	if imageFeatures == "" {
 		return nil
 	}
 	arr := strings.Split(imageFeatures, ",")
@@ -1092,7 +1169,10 @@ func (rv *rbdVolume) deleteSnapshot(ctx context.Context, pOpts *rbdSnapshot) err
 	return err
 }
 
-func (rv *rbdVolume) cloneRbdImageFromSnapshot(ctx context.Context, pSnapOpts *rbdSnapshot, parentVol *rbdVolume) error {
+func (rv *rbdVolume) cloneRbdImageFromSnapshot(
+	ctx context.Context,
+	pSnapOpts *rbdSnapshot,
+	parentVol *rbdVolume) error {
 	var err error
 	logMsg := "rbd: clone %s %s (features: %s) using mon %s"
 
@@ -1137,7 +1217,13 @@ func (rv *rbdVolume) cloneRbdImageFromSnapshot(ctx context.Context, pSnapOpts *r
 		return fmt.Errorf("failed to get IOContext: %w", err)
 	}
 
-	err = librbd.CloneImage(parentVol.ioctx, pSnapOpts.RbdImageName, pSnapOpts.RbdSnapName, rv.ioctx, rv.RbdImageName, options)
+	err = librbd.CloneImage(
+		parentVol.ioctx,
+		pSnapOpts.RbdImageName,
+		pSnapOpts.RbdSnapName,
+		rv.ioctx,
+		rv.RbdImageName,
+		options)
 	if err != nil {
 		return fmt.Errorf("failed to create rbd clone: %w", err)
 	}
@@ -1443,10 +1529,21 @@ func (ri *rbdImage) SetMetadata(key, value string) error {
 
 // setThickProvisioned records in the image metadata that it has been
 // thick-provisioned.
-func (rv *rbdVolume) setThickProvisioned() error {
-	err := rv.SetMetadata(thickProvisionMetaKey, "true")
+func (ri *rbdImage) setThickProvisioned() error {
+	err := ri.SetMetadata(thickProvisionMetaKey, thickProvisionMetaData)
 	if err != nil {
-		return fmt.Errorf("failed to set metadata %q for %q: %w", thickProvisionMetaKey, rv, err)
+		return fmt.Errorf("failed to set metadata %q for %q: %w", thickProvisionMetaKey, ri, err)
+	}
+
+	return nil
+}
+
+// setThinProvisioned records in the image metadata that it has been
+// thin-provisioned.
+func (ri *rbdImage) setThinProvisioned() error {
+	err := ri.SetMetadata(thickProvisionMetaKey, thinProvisionMetaData)
+	if err != nil {
+		return fmt.Errorf("failed to set metadata %q for %q: %w", thinProvisionMetaData, ri, err)
 	}
 
 	return nil
@@ -1457,10 +1554,25 @@ func (rv *rbdVolume) setThickProvisioned() error {
 // the expansion can be allocated too.
 func (ri *rbdImage) isThickProvisioned() (bool, error) {
 	value, err := ri.GetMetadata(thickProvisionMetaKey)
-	if err != nil {
+	if err == librbd.ErrNotFound {
+		// check if the image is having deprecated metadata key.
+		value, err = ri.GetMetadata(deprecatedthickProvisionMetaKey)
 		if err == librbd.ErrNotFound {
 			return false, nil
 		}
+		// If we reach here means the image has deprecated metakey set. Set the
+		// new metakey so that we dont need to check for deprecated key again.
+		if value == thickProvisionMetaData {
+			err = ri.setThickProvisioned()
+		} else {
+			value = thinProvisionMetaData
+			// If we reach here means the image is thin provisioned. Set thin
+			// provisioned metadata on the image so that we dont need to check
+			// for thick metakey or deprecated thick metakey.
+			err = ri.setThinProvisioned()
+		}
+	}
+	if err != nil {
 		return false, fmt.Errorf("failed to get metadata %q for %q: %w", thickProvisionMetaKey, ri, err)
 	}
 
@@ -1655,5 +1767,43 @@ func (rs *rbdSnapshot) isCompatibleThickProvision(dst *rbdVolume) error {
 		return fmt.Errorf("cannot create thick volume from thin volume %q", vol)
 	}
 
+	return nil
+}
+
+func (ri *rbdImage) addSnapshotScheduling(
+	interval admin.Interval,
+	startTime admin.StartTime) error {
+	ls := admin.NewLevelSpec(ri.Pool, ri.RadosNamespace, ri.RbdImageName)
+	ra, err := ri.conn.GetRBDAdmin()
+	if err != nil {
+		return err
+	}
+	adminConn := ra.MirrorSnashotSchedule()
+	// list all the snapshot scheduling and check at least one image scheduling
+	// exists with specified interval.
+	ssList, err := adminConn.List(ls)
+	if err != nil {
+		return err
+	}
+
+	for _, ss := range ssList {
+		// make sure we are matching image level scheduling. The
+		// `adminConn.List` lists the global level scheduling also.
+		if ss.Name == ri.String() {
+			for _, s := range ss.Schedule {
+				// TODO: Add support to check start time also.
+				// The start time is currently stored with different format
+				// in ceph. Comparison is not possible unless we know in
+				// which format ceph is storing it.
+				if s.Interval == interval {
+					return err
+				}
+			}
+		}
+	}
+	err = adminConn.Add(ls, interval, startTime)
+	if err != nil {
+		return err
+	}
 	return nil
 }

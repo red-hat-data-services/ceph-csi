@@ -24,12 +24,14 @@ import (
 )
 
 func checkError(t *testing.T, msg string, err error) {
+	t.Helper()
 	if err == nil {
 		t.Errorf(msg)
 	}
 }
 
 func checkAndReportError(t *testing.T, msg string, err error) {
+	t.Helper()
 	if err != nil {
 		t.Errorf("%s (%v)", msg, err)
 	}
@@ -37,6 +39,7 @@ func checkAndReportError(t *testing.T, msg string, err error) {
 
 // TestFindPoolAndTopology also tests MatchTopologyForPool.
 func TestFindPoolAndTopology(t *testing.T) {
+	t.Parallel()
 	var err error
 	var label1 = "region"
 	var label2 = "zone"

@@ -54,7 +54,13 @@ func waitForDaemonSets(name, ns string, c kubernetes.Interface, t int) error {
 		}
 		dNum := ds.Status.DesiredNumberScheduled
 		ready := ds.Status.NumberReady
-		e2elog.Logf("%d / %d pods ready in namespace '%s' in daemonset '%s' (%d seconds elapsed)", ready, dNum, ns, ds.ObjectMeta.Name, int(time.Since(start).Seconds()))
+		e2elog.Logf(
+			"%d / %d pods ready in namespace '%s' in daemonset '%s' (%d seconds elapsed)",
+			ready,
+			dNum,
+			ns,
+			ds.ObjectMeta.Name,
+			int(time.Since(start).Seconds()))
 		if ready != dNum {
 			return false, nil
 		}
@@ -75,12 +81,10 @@ func waitForDeploymentComplete(name, ns string, c kubernetes.Interface, t int) e
 	err = wait.PollImmediate(poll, timeout, func() (bool, error) {
 		deployment, err = c.AppsV1().Deployments(ns).Get(context.TODO(), name, metav1.GetOptions{})
 		if err != nil {
-			// a StatusError is not marked as 'retryable', but we want to retry anyway
-			if isRetryableAPIError(err) || strings.Contains(err.Error(), "etcdserver: request timed out") {
-				// hide API-server timeouts, so that PollImmediate() retries
-				e2elog.Logf("deployment error: %v", err)
+			if isRetryableAPIError(err) {
 				return false, nil
 			}
+			e2elog.Logf("deployment error: %v", err)
 			return false, err
 		}
 
@@ -91,7 +95,10 @@ func waitForDeploymentComplete(name, ns string, c kubernetes.Interface, t int) e
 		if deployment.Status.Replicas == deployment.Status.ReadyReplicas {
 			return true, nil
 		}
-		e2elog.Logf("deployment status: expected replica count %d running replica count %d", deployment.Status.Replicas, deployment.Status.ReadyReplicas)
+		e2elog.Logf(
+			"deployment status: expected replica count %d running replica count %d",
+			deployment.Status.Replicas,
+			deployment.Status.ReadyReplicas)
 		reason = fmt.Sprintf("deployment status: %#v", deployment.Status.String())
 		return false, nil
 	})
@@ -128,7 +135,10 @@ func findPodAndContainerName(f *framework.Framework, ns, cn string, opt *metav1.
 	return podList.Items[0].Name, podList.Items[0].Spec.Containers[0].Name, nil
 }
 
-func getCommandInPodOpts(f *framework.Framework, c, ns, cn string, opt *metav1.ListOptions) (framework.ExecOptions, error) {
+func getCommandInPodOpts(
+	f *framework.Framework,
+	c, ns, cn string,
+	opt *metav1.ListOptions) (framework.ExecOptions, error) {
 	cmd := []string{"/bin/sh", "-c", c}
 	pName, cName, err := findPodAndContainerName(f, ns, cn, opt)
 	if err != nil {
@@ -147,7 +157,9 @@ func getCommandInPodOpts(f *framework.Framework, c, ns, cn string, opt *metav1.L
 }
 
 // execCommandInDaemonsetPod executes commands inside given container of a daemonset pod on a particular node.
-func execCommandInDaemonsetPod(f *framework.Framework, c, daemonsetName, nodeName, containerName, ns string) (string, string, error) {
+func execCommandInDaemonsetPod(
+	f *framework.Framework,
+	c, daemonsetName, nodeName, containerName, ns string) (string, string, error) {
 	selector, err := getDaemonSetLabelSelector(f, ns, daemonsetName)
 	if err != nil {
 		return "", "", err
@@ -204,7 +216,9 @@ func execCommandInPod(f *framework.Framework, c, ns string, opt *metav1.ListOpti
 	return stdOut, stdErr, err
 }
 
-func execCommandInContainer(f *framework.Framework, c, ns, cn string, opt *metav1.ListOptions) (string, string, error) { //nolint:unparam,lll // cn can be used with different inputs later
+//nolint:unparam // cn can be used with different inputs later
+func execCommandInContainer(
+	f *framework.Framework, c, ns, cn string, opt *metav1.ListOptions) (string, string, error) {
 	podOpt, err := getCommandInPodOpts(f, c, ns, cn, opt)
 	if err != nil {
 		return "", "", err
@@ -259,16 +273,27 @@ func createApp(c kubernetes.Interface, app *v1.Pod, timeout int) error {
 	if err != nil {
 		return fmt.Errorf("failed to create app: %w", err)
 	}
-	return waitForPodInRunningState(app.Name, app.Namespace, c, timeout)
+	return waitForPodInRunningState(app.Name, app.Namespace, c, timeout, noError)
 }
 
-func waitForPodInRunningState(name, ns string, c kubernetes.Interface, t int) error {
+func createAppErr(c kubernetes.Interface, app *v1.Pod, timeout int, errString string) error {
+	_, err := c.CoreV1().Pods(app.Namespace).Create(context.TODO(), app, metav1.CreateOptions{})
+	if err != nil {
+		return err
+	}
+	return waitForPodInRunningState(app.Name, app.Namespace, c, timeout, errString)
+}
+
+func waitForPodInRunningState(name, ns string, c kubernetes.Interface, t int, expectedError string) error {
 	timeout := time.Duration(t) * time.Minute
 	start := time.Now()
 	e2elog.Logf("Waiting up to %v to be in Running state", name)
 	return wait.PollImmediate(poll, timeout, func() (bool, error) {
 		pod, err := c.CoreV1().Pods(ns).Get(context.TODO(), name, metav1.GetOptions{})
 		if err != nil {
+			if isRetryableAPIError(err) {
+				return false, nil
+			}
 			return false, fmt.Errorf("failed to get app: %w", err)
 		}
 		switch pod.Status.Phase {
@@ -276,8 +301,26 @@ func waitForPodInRunningState(name, ns string, c kubernetes.Interface, t int) er
 			return true, nil
 		case v1.PodFailed, v1.PodSucceeded:
 			return false, conditions.ErrPodCompleted
+		case v1.PodPending:
+			if expectedError != "" {
+				events, err := c.CoreV1().Events(ns).List(context.TODO(), metav1.ListOptions{
+					FieldSelector: fmt.Sprintf("involvedObject.name=%s", name),
+				})
+				if err != nil {
+					return false, err
+				}
+				if strings.Contains(events.String(), expectedError) {
+					e2elog.Logf("Expected Error %q found successfully", expectedError)
+					return true, err
+				}
+			}
+		case v1.PodUnknown:
+			e2elog.Logf(
+				"%s app  is in %s phase expected to be in Running  state (%d seconds elapsed)",
+				name,
+				pod.Status.Phase,
+				int(time.Since(start).Seconds()))
 		}
-		e2elog.Logf("%s app  is in %s phase expected to be in Running  state (%d seconds elapsed)", name, pod.Status.Phase, int(time.Since(start).Seconds()))
 		return false, nil
 	})
 }
@@ -292,19 +335,22 @@ func deletePod(name, ns string, c kubernetes.Interface, t int) error {
 	e2elog.Logf("Waiting for pod %v to be deleted", name)
 	return wait.PollImmediate(poll, timeout, func() (bool, error) {
 		_, err := c.CoreV1().Pods(ns).Get(context.TODO(), name, metav1.GetOptions{})
-
-		if apierrs.IsNotFound(err) {
-			return true, nil
-		}
-		e2elog.Logf("%s app  to be deleted (%d seconds elapsed)", name, int(time.Since(start).Seconds()))
 		if err != nil {
+			if isRetryableAPIError(err) {
+				return false, nil
+			}
+			if apierrs.IsNotFound(err) {
+				return true, nil
+			}
+			e2elog.Logf("%s app  to be deleted (%d seconds elapsed)", name, int(time.Since(start).Seconds()))
 			return false, fmt.Errorf("failed to get app: %w", err)
 		}
 		return false, nil
 	})
 }
 
-func deletePodWithLabel(label, ns string, skipNotFound bool) error { //nolint:unparam // skipNotFound can be used with different inputs later
+//nolint:unparam // skipNotFound arg can be used with different inputs later
+func deletePodWithLabel(label, ns string, skipNotFound bool) error {
 	_, err := framework.RunKubectl(ns, "delete", "po", "-l", label, fmt.Sprintf("--ignore-not-found=%t", skipNotFound))
 	if err != nil {
 		e2elog.Logf("failed to delete pod %v", err)

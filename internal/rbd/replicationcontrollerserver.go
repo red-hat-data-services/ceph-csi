@@ -19,12 +19,14 @@ package rbd
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/ceph/ceph-csi/internal/util"
 
 	librbd "github.com/ceph/go-ceph/rbd"
+	"github.com/ceph/go-ceph/rbd/admin"
 	"github.com/csi-addons/spec/lib/go/replication"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -56,6 +58,18 @@ const (
 	imageMirroringKey = "mirroringMode"
 	// forceKey + key to get the force option from parameters.
 	forceKey = "force"
+
+	// schedulingIntervalKey to get the schedulingInterval from the
+	// parameters.
+	// Interval of time between scheduled snapshots. Typically in the form
+	// <num><m,h,d>.
+	schedulingIntervalKey = "schedulingInterval"
+
+	// schedulingStartTimeKey to get the schedulingStartTime from the
+	// parameters.
+	// (optional) StartTime is the time the snapshot schedule
+	// begins, can be specified using the ISO 8601 time format.
+	schedulingStartTimeKey = "schedulingStartTime"
 )
 
 // ReplicationServer struct of rbd CSI driver with supported methods of Replication
@@ -90,7 +104,11 @@ func getForceOption(ctx context.Context, parameters map[string]string) (bool, er
 func getMirroringMode(ctx context.Context, parameters map[string]string) (librbd.ImageMirrorMode, error) {
 	val, ok := parameters[imageMirroringKey]
 	if !ok {
-		util.WarningLog(ctx, "%s is not set in parameters, setting to mirroringMode to default (%s)", imageMirroringKey, imageMirrorModeSnapshot)
+		util.WarningLog(
+			ctx,
+			"%s is not set in parameters, setting to mirroringMode to default (%s)",
+			imageMirroringKey,
+			imageMirrorModeSnapshot)
 		return librbd.ImageMirrorModeSnapshot, nil
 	}
 
@@ -102,6 +120,56 @@ func getMirroringMode(ctx context.Context, parameters map[string]string) (librbd
 		return mirroringMode, status.Errorf(codes.InvalidArgument, "%s %s not supported", imageMirroringKey, val)
 	}
 	return mirroringMode, nil
+}
+
+// getSchedulingDetails gets the mirroring mode and scheduling details from the
+// input GRPC request parameters and validates the scheduling is only supported
+// for mirroring mode.
+func getSchedulingDetails(parameters map[string]string) (admin.Interval, admin.StartTime, error) {
+	admInt := admin.NoInterval
+	adminStartTime := admin.NoStartTime
+	var err error
+
+	val := parameters[imageMirroringKey]
+
+	switch imageMirroringMode(val) {
+	case imageMirrorModeSnapshot:
+	default:
+		return admInt, adminStartTime, status.Error(codes.InvalidArgument, "scheduling is only supported for snapshot mode")
+	}
+
+	// validate mandatory interval field
+	interval, ok := parameters[schedulingIntervalKey]
+	if ok && interval == "" {
+		return admInt, adminStartTime, status.Error(codes.InvalidArgument, "scheduling interval cannot be empty")
+	}
+	adminStartTime = admin.StartTime(parameters[schedulingStartTimeKey])
+	if !ok {
+		// startTime is alone not supported it has to be present with interval
+		if adminStartTime != "" {
+			return admInt, admin.NoStartTime, status.Errorf(codes.InvalidArgument,
+				"%q parameter is supported only with %q",
+				schedulingStartTimeKey,
+				schedulingIntervalKey)
+		}
+	}
+	if interval != "" {
+		admInt, err = validateSchedulingInterval(interval)
+		if err != nil {
+			return admInt, admin.NoStartTime, status.Error(codes.InvalidArgument, err.Error())
+		}
+	}
+	return admInt, adminStartTime, nil
+}
+
+// validateSchedulingInterval return the interval as it is if its ending with
+// `m|h|d` or else it will return error.
+func validateSchedulingInterval(interval string) (admin.Interval, error) {
+	var re = regexp.MustCompile(`^\d+[mhd]$`)
+	if re.MatchString(interval) {
+		return admin.Interval(interval), nil
+	}
+	return "", errors.New("interval specified without d, h, m suffix")
 }
 
 // EnableVolumeReplication extracts the RBD volume information from the
@@ -119,6 +187,11 @@ func (rs *ReplicationServer) EnableVolumeReplication(ctx context.Context,
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	defer cr.DeleteCredentials()
+
+	interval, startTime, err := getSchedulingDetails(req.GetParameters())
+	if err != nil {
+		return nil, err
+	}
 
 	if acquired := rs.VolumeLocks.TryAcquire(volumeID); !acquired {
 		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, volumeID)
@@ -158,6 +231,20 @@ func (rs *ReplicationServer) EnableVolumeReplication(ctx context.Context,
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
+
+	if interval != "" {
+		err = rbdVol.addSnapshotScheduling(interval, startTime)
+		if err != nil {
+			return nil, err
+		}
+		util.DebugLog(
+			ctx,
+			"Added scheduling at interval %s, start time %s for volume %s",
+			interval,
+			startTime,
+			rbdVol)
+	}
+
 	return &replication.EnableVolumeReplicationResponse{}, nil
 }
 
@@ -286,7 +373,11 @@ func (rs *ReplicationServer) PromoteVolume(ctx context.Context,
 	}
 
 	if mirroringInfo.State != librbd.MirrorImageEnabled {
-		return nil, status.Errorf(codes.InvalidArgument, "mirroring is not enabled on %s, image is in %d Mode", rbdVol.VolID, mirroringInfo.State)
+		return nil, status.Errorf(
+			codes.InvalidArgument,
+			"mirroring is not enabled on %s, image is in %d Mode",
+			rbdVol.VolID,
+			mirroringInfo.State)
 	}
 
 	// promote secondary to primary
@@ -353,7 +444,11 @@ func (rs *ReplicationServer) DemoteVolume(ctx context.Context,
 	}
 
 	if mirroringInfo.State != librbd.MirrorImageEnabled {
-		return nil, status.Errorf(codes.InvalidArgument, "mirroring is not enabled on %s, image is in %d Mode", rbdVol.VolID, mirroringInfo.State)
+		return nil, status.Errorf(
+			codes.InvalidArgument,
+			"mirroring is not enabled on %s, image is in %d Mode",
+			rbdVol.VolID,
+			mirroringInfo.State)
 	}
 
 	// demote image to secondary
@@ -449,7 +544,13 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 		ready = true
 		for _, s := range mirrorStatus.PeerSites {
 			if imageMirroringState(s.State) != upAndUnknown {
-				util.UsefulLog(ctx, "peer site name=%s, mirroring state=%s, description=%s and lastUpdate=%s", s.SiteName, s.State, s.Description, s.LastUpdate)
+				util.UsefulLog(
+					ctx,
+					"peer site name=%s, mirroring state=%s, description=%s and lastUpdate=%s",
+					s.SiteName,
+					s.State,
+					s.Description,
+					s.LastUpdate)
 				ready = false
 			}
 		}
@@ -464,7 +565,12 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 		}
 	}
 
-	util.UsefulLog(ctx, "image mirroring state=%s, description=%s and lastUpdate=%s", mirrorStatus.State, mirrorStatus.Description, mirrorStatus.LastUpdate)
+	util.UsefulLog(
+		ctx,
+		"image mirroring state=%s, description=%s and lastUpdate=%s",
+		mirrorStatus.State,
+		mirrorStatus.Description,
+		mirrorStatus.LastUpdate)
 	resp := &replication.ResyncVolumeResponse{
 		Ready: ready,
 	}

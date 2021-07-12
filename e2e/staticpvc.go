@@ -11,7 +11,10 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework"
 )
 
-func getStaticPV(name, volName, size, secretName, secretNS, sc, driverName string, blockPV bool, options map[string]string) *v1.PersistentVolume {
+func getStaticPV(
+	name, volName, size, secretName, secretNS, sc, driverName string,
+	blockPV bool,
+	options map[string]string) *v1.PersistentVolume {
 	pv := &v1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -77,7 +80,7 @@ func getStaticPVC(name, pvName, size, ns, sc string, blockPVC bool) *v1.Persiste
 	return pvc
 }
 
-func validateRBDStaticPV(f *framework.Framework, appPath string, isBlock bool) error {
+func validateRBDStaticPV(f *framework.Framework, appPath string, isBlock, checkImgFeat bool) error {
 	opt := make(map[string]string)
 	var (
 		rbdImageName = "test-static-pv"
@@ -102,7 +105,11 @@ func validateRBDStaticPV(f *framework.Framework, appPath string, isBlock bool) e
 	fsID = strings.Trim(fsID, "\n")
 	size := "4Gi"
 	// create rbd image
-	cmd := fmt.Sprintf("rbd create %s --size=%d --image-feature=layering %s", rbdImageName, 4096, rbdOptions(defaultRBDPool))
+	cmd := fmt.Sprintf(
+		"rbd create %s --size=%d --image-feature=layering %s",
+		rbdImageName,
+		4096,
+		rbdOptions(defaultRBDPool))
 
 	_, e, err = execCommandInToolBoxPod(f, cmd, rookNamespace)
 	if err != nil {
@@ -112,14 +119,25 @@ func validateRBDStaticPV(f *framework.Framework, appPath string, isBlock bool) e
 		return fmt.Errorf("failed to create rbd image %s", e)
 	}
 	opt["clusterID"] = fsID
-	opt["imageFeatures"] = "layering"
+	if !checkImgFeat {
+		opt["imageFeatures"] = "layering"
+	}
 	opt["pool"] = defaultRBDPool
 	opt["staticVolume"] = "true"
 	if radosNamespace != "" {
 		opt["radosNamespace"] = radosNamespace
 	}
 
-	pv := getStaticPV(pvName, rbdImageName, size, rbdNodePluginSecretName, cephCSINamespace, sc, "rbd.csi.ceph.com", isBlock, opt)
+	pv := getStaticPV(
+		pvName,
+		rbdImageName,
+		size,
+		rbdNodePluginSecretName,
+		cephCSINamespace,
+		sc,
+		"rbd.csi.ceph.com",
+		isBlock,
+		opt)
 
 	_, err = c.CoreV1().PersistentVolumes().Create(context.TODO(), pv, metav1.CreateOptions{})
 	if err != nil {
@@ -140,7 +158,11 @@ func validateRBDStaticPV(f *framework.Framework, appPath string, isBlock bool) e
 
 	app.Namespace = namespace
 	app.Spec.Volumes[0].PersistentVolumeClaim.ClaimName = pvcName
-	err = createApp(f.ClientSet, app, deployTimeout)
+	if checkImgFeat {
+		err = createAppErr(f.ClientSet, app, deployTimeout, "missing required parameter imageFeatures")
+	} else {
+		err = createApp(f.ClientSet, app, deployTimeout)
+	}
 	if err != nil {
 		return err
 	}

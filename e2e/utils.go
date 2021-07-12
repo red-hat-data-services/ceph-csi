@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kubernetes-csi/external-snapshotter/v2/pkg/apis/volumesnapshot/v1beta1"
+	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	v1 "k8s.io/api/core/v1"
 	scv1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -28,11 +28,6 @@ import (
 const (
 	defaultNs     = "default"
 	defaultSCName = ""
-	// vaultBackendPath is the default VAULT_BACKEND_PATH for secrets
-	vaultBackendPath = "secret/"
-	// vaultPassphrasePath is an advanced configuration option, only
-	// available for the VaultKMS (not VaultTokensKMS) provider.
-	vaultPassphrasePath = "ceph-csi/"
 
 	rookToolBoxPodLabel = "app=rook-ceph-tools"
 	rbdMountOptions     = "mountOptions"
@@ -44,8 +39,7 @@ const (
 	appKey   = "app"
 	appLabel = "write-data-in-pod"
 
-	// vaultTokens KMS type
-	vaultTokens = "vaulttokens"
+	noError = ""
 )
 
 var (
@@ -55,19 +49,18 @@ var (
 	deployRBD        bool
 	testCephFS       bool
 	testRBD          bool
+	helmTest         bool
 	upgradeTesting   bool
 	upgradeVersion   string
 	cephCSINamespace string
 	rookNamespace    string
 	radosNamespace   string
 	ns               string
-	vaultAddr        string
 	poll             = 2 * time.Second
 )
 
-func initResouces() {
+func initResources() {
 	ns = fmt.Sprintf("--namespace=%v", cephCSINamespace)
-	vaultAddr = fmt.Sprintf("http://vault.%s.svc.cluster.local:8200", cephCSINamespace)
 }
 
 func getMons(ns string, c kubernetes.Interface) ([]string, error) {
@@ -81,7 +74,11 @@ func getMons(ns string, c kubernetes.Interface) ([]string, error) {
 		return services, fmt.Errorf("failed to list services: %w", err)
 	}
 	for i := range svcList.Items {
-		s := fmt.Sprintf("%s.%s.svc.cluster.local:%d", svcList.Items[i].Name, svcList.Items[i].Namespace, svcList.Items[i].Spec.Ports[0].Port)
+		s := fmt.Sprintf(
+			"%s.%s.svc.cluster.local:%d",
+			svcList.Items[i].Name,
+			svcList.Items[i].Namespace,
+			svcList.Items[i].Spec.Ports[0].Port)
 		services = append(services, s)
 	}
 	return services, nil
@@ -134,7 +131,12 @@ func unmarshal(fileName string, obj interface{}) error {
 
 // createPVCAndApp creates pvc and pod
 // if name is not empty same will be set as pvc and app name.
-func createPVCAndApp(name string, f *framework.Framework, pvc *v1.PersistentVolumeClaim, app *v1.Pod, pvcTimeout int) error {
+func createPVCAndApp(
+	name string,
+	f *framework.Framework,
+	pvc *v1.PersistentVolumeClaim,
+	app *v1.Pod,
+	pvcTimeout int) error {
 	if name != "" {
 		pvc.Name = name
 		app.Name = name
@@ -165,7 +167,10 @@ func deletePVCAndApp(name string, f *framework.Framework, pvc *v1.PersistentVolu
 	return err
 }
 
-func createPVCAndAppBinding(pvcPath, appPath string, f *framework.Framework, pvcTimeout int) (*v1.PersistentVolumeClaim, *v1.Pod, error) {
+func createPVCAndAppBinding(
+	pvcPath, appPath string,
+	f *framework.Framework,
+	pvcTimeout int) (*v1.PersistentVolumeClaim, *v1.Pod, error) {
 	pvc, err := loadPVC(pvcPath)
 	if err != nil {
 		return nil, nil, err
@@ -208,29 +213,6 @@ func getMountType(appName, appNamespace, mountPath string, f *framework.Framewor
 		return strings.TrimSpace(stdOut), fmt.Errorf(stdErr)
 	}
 	return strings.TrimSpace(stdOut), nil
-}
-
-// readVaultSecret method will execute few commands to try read the secret for
-// specified key from inside the vault container:
-//  * authenticate with vault and ignore any stdout (we do not need output)
-//  * issue get request for particular key
-// resulting in stdOut (first entry in tuple) - output that contains the key
-// or stdErr (second entry in tuple) - error getting the key.
-func readVaultSecret(key string, usePassphrasePath bool, f *framework.Framework) (string, string) {
-	extraPath := vaultPassphrasePath
-	if !usePassphrasePath {
-		extraPath = ""
-	}
-
-	loginCmd := fmt.Sprintf("vault login -address=%s sample_root_token_id > /dev/null", vaultAddr)
-	readSecret := fmt.Sprintf("vault kv get -address=%s -field=data %s%s%s",
-		vaultAddr, vaultBackendPath, extraPath, key)
-	cmd := fmt.Sprintf("%s && %s", loginCmd, readSecret)
-	opt := metav1.ListOptions{
-		LabelSelector: "app=vault",
-	}
-	stdOut, stdErr := execCommandInPodAndAllowFail(f, cmd, cephCSINamespace, &opt)
-	return strings.TrimSpace(stdOut), strings.TrimSpace(stdErr)
 }
 
 func validateNormalUserPVCAccess(pvcPath string, f *framework.Framework) error {
@@ -297,7 +279,7 @@ func validateNormalUserPVCAccess(pvcPath string, f *framework.Framework) error {
 	}
 	_, stdErr, err := execCommandInPod(f, "echo testing > /target/testing", app.Namespace, &opt)
 	if err != nil {
-		return nil
+		return fmt.Errorf("failed to exec command in pod: %w", err)
 	}
 	if stdErr != "" {
 		return fmt.Errorf("failed to touch a file as non-root user %v", stdErr)
@@ -337,7 +319,11 @@ func writeDataInPod(app *v1.Pod, opt *metav1.ListOptions, f *framework.Framework
 	// instead of filling and reverifying the md5sum/data integrity
 	filePath := app.Spec.Containers[0].VolumeMounts[0].MountPath + "/test"
 	// While writing more data we are encountering issues in E2E timeout, so keeping it low for now
-	_, writeErr, err := execCommandInPod(f, fmt.Sprintf("dd if=/dev/zero of=%s bs=1M count=10 status=none", filePath), app.Namespace, opt)
+	_, writeErr, err := execCommandInPod(
+		f,
+		fmt.Sprintf("dd if=/dev/zero of=%s bs=1M count=10 status=none", filePath),
+		app.Namespace,
+		opt)
 	if err != nil {
 		return err
 	}
@@ -377,7 +363,7 @@ func checkDataPersist(pvcPath, appPath string, f *framework.Framework) error {
 
 	_, stdErr, err := execCommandInPod(f, fmt.Sprintf("echo %s > %s", data, filePath), app.Namespace, &opt)
 	if err != nil {
-		return nil
+		return fmt.Errorf("failed to exec command in pod: %w", err)
 	}
 	if stdErr != "" {
 		return fmt.Errorf("failed to write data to a file %v", stdErr)
@@ -521,8 +507,13 @@ func writeDataAndCalChecksum(app *v1.Pod, opt *metav1.ListOptions, f *framework.
 	return checkSum, nil
 }
 
-// nolint:gocyclo,gocognit // reduce complexity
-func validatePVCClone(totalCount int, sourcePvcPath, sourceAppPath, clonePvcPath, clonePvcAppPath string, validatePVC validateFunc, f *framework.Framework) {
+// nolint:gocyclo,gocognit,nestif // reduce complexity
+func validatePVCClone(
+	totalCount int,
+	sourcePvcPath, sourceAppPath, clonePvcPath, clonePvcAppPath string,
+	kms kmsConfig,
+	validatePVC validateFunc,
+	f *framework.Framework) {
 	var wg sync.WaitGroup
 	wgErrs := make([]error, totalCount)
 	chErrs := make([]error, totalCount)
@@ -550,7 +541,9 @@ func validatePVCClone(totalCount int, sourcePvcPath, sourceAppPath, clonePvcPath
 	}
 
 	checkSum := ""
-	pvc, err = f.ClientSet.CoreV1().PersistentVolumeClaims(pvc.Namespace).Get(context.TODO(), pvc.Name, metav1.GetOptions{})
+	pvc, err = f.ClientSet.CoreV1().
+		PersistentVolumeClaims(pvc.Namespace).
+		Get(context.TODO(), pvc.Name, metav1.GetOptions{})
 	if err != nil {
 		e2elog.Failf("failed to get pvc %v", err)
 	}
@@ -576,7 +569,7 @@ func validatePVCClone(totalCount int, sourcePvcPath, sourceAppPath, clonePvcPath
 	wg.Add(totalCount)
 	// create clone and bind it to an app
 	for i := 0; i < totalCount; i++ {
-		go func(w *sync.WaitGroup, n int, p v1.PersistentVolumeClaim, a v1.Pod) {
+		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			label := make(map[string]string)
 			label[appKey] = name
@@ -585,6 +578,28 @@ func validatePVCClone(totalCount int, sourcePvcPath, sourceAppPath, clonePvcPath
 				LabelSelector: fmt.Sprintf("%s=%s", appKey, label[appKey]),
 			}
 			wgErrs[n] = createPVCAndApp(name, f, &p, &a, deployTimeout)
+			if wgErrs[n] == nil && kms != noKMS {
+				if kms.canGetPassphrase() {
+					imageData, sErr := getImageInfoFromPVC(p.Namespace, name, f)
+					if sErr != nil {
+						wgErrs[n] = fmt.Errorf(
+							"failed to get image info for %s namespace=%s volumehandle=%s error=%w",
+							name,
+							p.Namespace,
+							imageData.csiVolumeHandle,
+							sErr)
+					} else {
+						// check new passphrase created
+						stdOut, stdErr := kms.getPassphrase(f, imageData.csiVolumeHandle)
+						if stdOut != "" {
+							e2elog.Logf("successfully read the passphrase from vault: %s", stdOut)
+						}
+						if stdErr != "" {
+							wgErrs[n] = fmt.Errorf("failed to read passphrase from vault: %s", stdErr)
+						}
+					}
+				}
+			}
 			if *pvc.Spec.VolumeMode == v1.PersistentVolumeFilesystem && wgErrs[n] == nil {
 				filePath := a.Spec.Containers[0].VolumeMounts[0].MountPath + "/test"
 				var checkSumClone string
@@ -598,11 +613,11 @@ func validatePVCClone(totalCount int, sourcePvcPath, sourceAppPath, clonePvcPath
 					e2elog.Logf("checksum didn't match. checksum=%s and checksumclone=%s", checkSum, checkSumClone)
 				}
 			}
-			if wgErrs[n] == nil && validatePVC != nil {
+			if wgErrs[n] == nil && validatePVC != nil && kms != noKMS {
 				wgErrs[n] = validatePVC(f, &p, &a)
 			}
-			w.Done()
-		}(&wg, i, *pvcClone, *appClone)
+			wg.Done()
+		}(i, *pvcClone, *appClone)
 	}
 	wg.Wait()
 
@@ -644,12 +659,38 @@ func validatePVCClone(totalCount int, sourcePvcPath, sourceAppPath, clonePvcPath
 	wg.Add(totalCount)
 	// delete clone and app
 	for i := 0; i < totalCount; i++ {
-		go func(w *sync.WaitGroup, n int, p v1.PersistentVolumeClaim, a v1.Pod) {
+		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			p.Spec.DataSource.Name = name
-			wgErrs[n] = deletePVCAndApp(name, f, &p, &a)
-			w.Done()
-		}(&wg, i, *pvcClone, *appClone)
+			var imageData imageInfoFromPVC
+			var sErr error
+			if kms != noKMS {
+				if kms.canGetPassphrase() {
+					imageData, sErr = getImageInfoFromPVC(p.Namespace, name, f)
+					if sErr != nil {
+						wgErrs[n] = fmt.Errorf(
+							"failed to get image info for %s namespace=%s volumehandle=%s error=%w",
+							name,
+							p.Namespace,
+							imageData.csiVolumeHandle,
+							sErr)
+					}
+				}
+			}
+			if wgErrs[n] == nil {
+				wgErrs[n] = deletePVCAndApp(name, f, &p, &a)
+				if wgErrs[n] == nil && kms != noKMS {
+					if kms.canGetPassphrase() {
+						// check passphrase deleted
+						stdOut, _ := kms.getPassphrase(f, imageData.csiVolumeHandle)
+						if stdOut != "" {
+							wgErrs[n] = fmt.Errorf("passphrase found in vault while should be deleted: %s", stdOut)
+						}
+					}
+				}
+			}
+			wg.Done()
+		}(i, *pvcClone, *appClone)
 	}
 	wg.Wait()
 
@@ -668,12 +709,14 @@ func validatePVCClone(totalCount int, sourcePvcPath, sourceAppPath, clonePvcPath
 }
 
 // nolint:gocyclo,gocognit,nestif // reduce complexity
-func validatePVCSnapshot(totalCount int, pvcPath, appPath, snapshotPath, pvcClonePath, appClonePath, kms string, f *framework.Framework) {
+func validatePVCSnapshot(
+	totalCount int,
+	pvcPath, appPath, snapshotPath, pvcClonePath, appClonePath string,
+	kms kmsConfig,
+	f *framework.Framework) {
 	var wg sync.WaitGroup
 	wgErrs := make([]error, totalCount)
 	chErrs := make([]error, totalCount)
-	wg.Add(totalCount)
-
 	err := createRBDSnapshotClass(f)
 	if err != nil {
 		e2elog.Failf("failed to create storageclass with error %v", err)
@@ -715,27 +758,33 @@ func validatePVCSnapshot(totalCount int, pvcPath, appPath, snapshotPath, pvcClon
 	snap := getSnapshot(snapshotPath)
 	snap.Namespace = f.UniqueName
 	snap.Spec.Source.PersistentVolumeClaimName = &pvc.Name
+
+	wg.Add(totalCount)
 	// create snapshot
 	for i := 0; i < totalCount; i++ {
-		go func(w *sync.WaitGroup, n int, s v1beta1.VolumeSnapshot) {
+		go func(n int, s snapapi.VolumeSnapshot) {
 			s.Name = fmt.Sprintf("%s%d", f.UniqueName, n)
 			wgErrs[n] = createSnapshot(&s, deployTimeout)
-			if wgErrs[n] == nil && kms != "" {
-				if kmsIsVault(kms) || kms == vaultTokens {
+			if wgErrs[n] == nil && kms != noKMS {
+				if kms.canGetPassphrase() {
 					content, sErr := getVolumeSnapshotContent(s.Namespace, s.Name)
 					if sErr != nil {
-						wgErrs[n] = fmt.Errorf("failed to get snapshotcontent for %s in namespace %s with error: %w", s.Name, s.Namespace, sErr)
+						wgErrs[n] = fmt.Errorf(
+							"failed to get snapshotcontent for %s in namespace %s with error: %w",
+							s.Name,
+							s.Namespace,
+							sErr)
 					} else {
 						// check new passphrase created
-						_, stdErr := readVaultSecret(*content.Status.SnapshotHandle, kmsIsVault(kms), f)
+						_, stdErr := kms.getPassphrase(f, *content.Status.SnapshotHandle)
 						if stdErr != "" {
 							wgErrs[n] = fmt.Errorf("failed to read passphrase from vault: %s", stdErr)
 						}
 					}
 				}
 			}
-			w.Done()
-		}(&wg, i, snap)
+			wg.Done()
+		}(i, snap)
 	}
 	wg.Wait()
 
@@ -768,7 +817,7 @@ func validatePVCSnapshot(totalCount int, pvcPath, appPath, snapshotPath, pvcClon
 	// create multiple PVC from same snapshot
 	wg.Add(totalCount)
 	for i := 0; i < totalCount; i++ {
-		go func(w *sync.WaitGroup, n int, p v1.PersistentVolumeClaim, a v1.Pod) {
+		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			label := make(map[string]string)
 			label[appKey] = name
@@ -787,14 +836,17 @@ func validatePVCSnapshot(totalCount int, pvcPath, appPath, snapshotPath, pvcClon
 					e2elog.Logf("failed to calculte checksum for clone with error %s", chErrs[n])
 				}
 				if checkSumClone != checkSum {
-					e2elog.Logf("checksum value didn't match. checksum=%s and checksumclone=%s", checkSum, checkSumClone)
+					e2elog.Logf(
+						"checksum value didn't match. checksum=%s and checksumclone=%s",
+						checkSum,
+						checkSumClone)
 				}
 			}
-			if wgErrs[n] == nil && kms != "" {
+			if wgErrs[n] == nil && kms != noKMS {
 				wgErrs[n] = isEncryptedPVC(f, &p, &a)
 			}
-			w.Done()
-		}(&wg, i, *pvcClone, *appClone)
+			wg.Done()
+		}(i, *pvcClone, *appClone)
 	}
 	wg.Wait()
 
@@ -826,12 +878,12 @@ func validatePVCSnapshot(totalCount int, pvcPath, appPath, snapshotPath, pvcClon
 	wg.Add(totalCount)
 	// delete clone and app
 	for i := 0; i < totalCount; i++ {
-		go func(w *sync.WaitGroup, n int, p v1.PersistentVolumeClaim, a v1.Pod) {
+		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			p.Spec.DataSource.Name = name
 			wgErrs[n] = deletePVCAndApp(name, f, &p, &a)
-			w.Done()
-		}(&wg, i, *pvcClone, *appClone)
+			wg.Done()
+		}(i, *pvcClone, *appClone)
 	}
 	wg.Wait()
 
@@ -853,12 +905,12 @@ func validatePVCSnapshot(totalCount int, pvcPath, appPath, snapshotPath, pvcClon
 	// app
 	wg.Add(totalCount)
 	for i := 0; i < totalCount; i++ {
-		go func(w *sync.WaitGroup, n int, p v1.PersistentVolumeClaim, a v1.Pod) {
+		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			p.Spec.DataSource.Name = name
 			wgErrs[n] = createPVCAndApp(name, f, &p, &a, deployTimeout)
-			w.Done()
-		}(&wg, i, *pvcClone, *appClone)
+			wg.Done()
+		}(i, *pvcClone, *appClone)
 	}
 	wg.Wait()
 
@@ -889,32 +941,36 @@ func validatePVCSnapshot(totalCount int, pvcPath, appPath, snapshotPath, pvcClon
 	wg.Add(totalCount)
 	// delete snapshot
 	for i := 0; i < totalCount; i++ {
-		go func(w *sync.WaitGroup, n int, s v1beta1.VolumeSnapshot) {
+		go func(n int, s snapapi.VolumeSnapshot) {
 			s.Name = fmt.Sprintf("%s%d", f.UniqueName, n)
-			content := &v1beta1.VolumeSnapshotContent{}
+			content := &snapapi.VolumeSnapshotContent{}
 			var err error
-			if kms != "" {
-				if kmsIsVault(kms) || kms == vaultTokens {
+			if kms != noKMS {
+				if kms.canGetPassphrase() {
 					content, err = getVolumeSnapshotContent(s.Namespace, s.Name)
 					if err != nil {
-						wgErrs[n] = fmt.Errorf("failed to get snapshotcontent for %s in namespace %s with error: %w", s.Name, s.Namespace, err)
+						wgErrs[n] = fmt.Errorf(
+							"failed to get snapshotcontent for %s in namespace %s with error: %w",
+							s.Name,
+							s.Namespace,
+							err)
 					}
 				}
 			}
 			if wgErrs[n] == nil {
 				wgErrs[n] = deleteSnapshot(&s, deployTimeout)
-				if wgErrs[n] == nil && kms != "" {
-					if kmsIsVault(kms) || kms == vaultTokens {
+				if wgErrs[n] == nil && kms != noKMS {
+					if kms.canGetPassphrase() {
 						// check passphrase deleted
-						stdOut, _ := readVaultSecret(*content.Status.SnapshotHandle, kmsIsVault(kms), f)
+						stdOut, _ := kms.getPassphrase(f, *content.Status.SnapshotHandle)
 						if stdOut != "" {
 							wgErrs[n] = fmt.Errorf("passphrase found in vault while should be deleted: %s", stdOut)
 						}
 					}
 				}
 			}
-			w.Done()
-		}(&wg, i, snap)
+			wg.Done()
+		}(i, snap)
 	}
 	wg.Wait()
 
@@ -933,12 +989,12 @@ func validatePVCSnapshot(totalCount int, pvcPath, appPath, snapshotPath, pvcClon
 	wg.Add(totalCount)
 	// delete clone and app
 	for i := 0; i < totalCount; i++ {
-		go func(w *sync.WaitGroup, n int, p v1.PersistentVolumeClaim, a v1.Pod) {
+		go func(n int, p v1.PersistentVolumeClaim, a v1.Pod) {
 			name := fmt.Sprintf("%s%d", f.UniqueName, n)
 			p.Spec.DataSource.Name = name
 			wgErrs[n] = deletePVCAndApp(name, f, &p, &a)
-			w.Done()
-		}(&wg, i, *pvcClone, *appClone)
+			wg.Done()
+		}(i, *pvcClone, *appClone)
 	}
 	wg.Wait()
 

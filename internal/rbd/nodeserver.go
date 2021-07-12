@@ -32,7 +32,6 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/kubernetes/pkg/util/resizefs"
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
 )
@@ -111,7 +110,9 @@ var (
 //   - Create the staging file/directory under staging path
 //   - Stage the device (mount the device mapped for image)
 // TODO: make this function less complex.
-func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func (ns *NodeServer) NodeStageVolume(
+	ctx context.Context,
+	req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	if err := util.ValidateNodeStageVolumeRequest(req); err != nil {
 		return nil, err
 	}
@@ -121,8 +122,16 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	// MULTI_NODE_MULTI_WRITER is supported by default for Block access type volumes
 	if req.VolumeCapability.AccessMode.Mode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
 		if !isBlock {
-			util.WarningLog(ctx, "MULTI_NODE_MULTI_WRITER currently only supported with volumes of access type `block`, invalid AccessMode for volume: %v", req.GetVolumeId())
-			return nil, status.Error(codes.InvalidArgument, "rbd: RWX access mode request is only valid for volumes with access type `block`")
+			util.WarningLog(
+				ctx,
+				"MULTI_NODE_MULTI_WRITER currently only supported with volumes of access type `block`,"+
+					"invalid AccessMode for volume: %v",
+				req.GetVolumeId(),
+			)
+			return nil, status.Error(
+				codes.InvalidArgument,
+				"rbd: RWX access mode request is only valid for volumes with access type `block`",
+			)
 		}
 
 		disableInUseChecks = true
@@ -154,16 +163,19 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		}
 	}
 
-	var isNotMnt bool
 	// check if stagingPath is already mounted
-	isNotMnt, err = mount.IsNotMountPoint(ns.mounter, stagingTargetPath)
-	if err != nil && !os.IsNotExist(err) {
+	isNotMnt, err := isNotMountPoint(ns.mounter, stagingTargetPath)
+	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	if !isNotMnt {
+	} else if !isNotMnt {
 		util.DebugLog(ctx, "rbd: volume %s is already mounted to %s, skipping", volID, stagingTargetPath)
 		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
+	// throw error when imageFeatures parameter is missing or empty
+	// for backward compatibility, ignore error for non-static volumes from older cephcsi version
+	if imageFeatures, ok := req.GetVolumeContext()["imageFeatures"]; checkImageFeatures(imageFeatures, ok, staticVol) {
+		return nil, status.Error(codes.InvalidArgument, "missing required parameter imageFeatures")
 	}
 
 	volOptions, err := genVolFromVolumeOptions(ctx, req.GetVolumeContext(), req.GetSecrets(), disableInUseChecks)
@@ -228,12 +240,20 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	util.DebugLog(ctx, "rbd: successfully mounted volume %s to stagingTargetPath %s", req.GetVolumeId(), stagingTargetPath)
+	util.DebugLog(
+		ctx,
+		"rbd: successfully mounted volume %s to stagingTargetPath %s",
+		req.GetVolumeId(),
+		stagingTargetPath)
 
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
-func (ns *NodeServer) stageTransaction(ctx context.Context, req *csi.NodeStageVolumeRequest, volOptions *rbdVolume, staticVol bool) (stageTransaction, error) {
+func (ns *NodeServer) stageTransaction(
+	ctx context.Context,
+	req *csi.NodeStageVolumeRequest,
+	volOptions *rbdVolume,
+	staticVol bool) (stageTransaction, error) {
 	transaction := stageTransaction{}
 
 	var err error
@@ -327,7 +347,11 @@ func (ns *NodeServer) stageTransaction(ctx context.Context, req *csi.NodeStageVo
 	return transaction, err
 }
 
-func (ns *NodeServer) undoStagingTransaction(ctx context.Context, req *csi.NodeStageVolumeRequest, transaction stageTransaction, volOptions *rbdVolume) {
+func (ns *NodeServer) undoStagingTransaction(
+	ctx context.Context,
+	req *csi.NodeStageVolumeRequest,
+	transaction stageTransaction,
+	volOptions *rbdVolume) {
 	var err error
 
 	stagingTargetPath := getStagingTargetPath(req)
@@ -344,7 +368,8 @@ func (ns *NodeServer) undoStagingTransaction(ctx context.Context, req *csi.NodeS
 		err = os.Remove(stagingTargetPath)
 		if err != nil {
 			util.ErrorLog(ctx, "failed to remove stagingtargetPath: %s with error: %v", stagingTargetPath, err)
-			// continue on failure to unmap the image, as leaving stale images causes more issues than a stale file/directory
+			// continue on failure to unmap the image, as leaving stale images causes more issues than a stale
+			// file/directory
 		}
 	}
 
@@ -354,8 +379,14 @@ func (ns *NodeServer) undoStagingTransaction(ctx context.Context, req *csi.NodeS
 	if transaction.devicePath != "" {
 		err = detachRBDDevice(ctx, transaction.devicePath, volID, volOptions.UnmapOptions, transaction.isEncrypted)
 		if err != nil {
-			util.ErrorLog(ctx, "failed to unmap rbd device: %s for volume %s with error: %v", transaction.devicePath, volID, err)
-			// continue on failure to delete the stash file, as kubernetes will fail to delete the staging path otherwise
+			util.ErrorLog(
+				ctx,
+				"failed to unmap rbd device: %s for volume %s with error: %v",
+				transaction.devicePath,
+				volID,
+				err)
+			// continue on failure to delete the stash file, as kubernetes will fail to delete the staging path
+			// otherwise
 		}
 	}
 
@@ -395,7 +426,9 @@ func (ns *NodeServer) createStageMountPoint(ctx context.Context, mountPath strin
 
 // NodePublishVolume mounts the volume mounted to the device path to the target
 // path.
-func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+func (ns *NodeServer) NodePublishVolume(
+	ctx context.Context,
+	req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	err := util.ValidateNodePublishVolumeRequest(req)
 	if err != nil {
 		return nil, err
@@ -432,7 +465,11 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
-func (ns *NodeServer) mountVolumeToStagePath(ctx context.Context, req *csi.NodeStageVolumeRequest, staticVol bool, stagingPath, devicePath string) (bool, error) {
+func (ns *NodeServer) mountVolumeToStagePath(
+	ctx context.Context,
+	req *csi.NodeStageVolumeRequest,
+	staticVol bool,
+	stagingPath, devicePath string) (bool, error) {
 	readOnly := false
 	fsType := req.GetVolumeCapability().GetMount().GetFsType()
 	diskMounter := &mount.SafeFormatAndMount{Interface: ns.mounter, Exec: utilexec.New()}
@@ -538,7 +575,7 @@ func (ns *NodeServer) createTargetMountPath(ctx context.Context, mountPath strin
 	// Check if that mount path exists properly
 	notMnt, err := mount.IsNotMountPoint(ns.mounter, mountPath)
 	if err == nil {
-		return notMnt, err
+		return notMnt, nil
 	}
 	if !os.IsNotExist(err) {
 		return false, status.Error(codes.Internal, err.Error())
@@ -565,7 +602,9 @@ func (ns *NodeServer) createTargetMountPath(ctx context.Context, mountPath strin
 }
 
 // NodeUnpublishVolume unmounts the volume from the target path.
-func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+func (ns *NodeServer) NodeUnpublishVolume(
+	ctx context.Context,
+	req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	err := util.ValidateNodeUnpublishVolumeRequest(req)
 	if err != nil {
 		return nil, err
@@ -623,7 +662,9 @@ func getStagingTargetPath(req interface{}) string {
 }
 
 // NodeUnstageVolume unstages the volume from the staging path.
-func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+func (ns *NodeServer) NodeUnstageVolume(
+	ctx context.Context,
+	req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
 	var err error
 	if err = util.ValidateNodeUnstageVolumeRequest(req); err != nil {
 		return nil, err
@@ -690,8 +731,19 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 
 	// Unmapping rbd device
 	imageSpec := imgInfo.String()
-	if err = detachRBDImageOrDeviceSpec(ctx, imageSpec, true, imgInfo.NbdAccess, imgInfo.Encrypted, req.GetVolumeId(), imgInfo.UnmapOptions); err != nil {
-		util.ErrorLog(ctx, "error unmapping volume (%s) from staging path (%s): (%v)", req.GetVolumeId(), stagingTargetPath, err)
+	if err = detachRBDImageOrDeviceSpec(
+		ctx, imageSpec,
+		true,
+		imgInfo.NbdAccess,
+		imgInfo.Encrypted,
+		req.GetVolumeId(),
+		imgInfo.UnmapOptions); err != nil {
+		util.ErrorLog(
+			ctx,
+			"error unmapping volume (%s) from staging path (%s): (%v)",
+			req.GetVolumeId(),
+			stagingTargetPath,
+			err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -706,7 +758,9 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 }
 
 // NodeExpandVolume resizes rbd volumes.
-func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
+func (ns *NodeServer) NodeExpandVolume(
+	ctx context.Context,
+	req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID must be provided")
@@ -736,10 +790,9 @@ func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	diskMounter := &mount.SafeFormatAndMount{Interface: ns.mounter, Exec: utilexec.New()}
 	// TODO check size and return success or error
 	volumePath += "/" + volumeID
-	resizer := resizefs.NewResizeFs(diskMounter)
+	resizer := mount.NewResizeFs(utilexec.New())
 	ok, err := resizer.Resize(devicePath, volumePath)
 	if !ok {
 		return nil, status.Errorf(codes.Internal, "rbd: resize failed on path %s, error: %v", req.GetVolumePath(), err)
@@ -752,7 +805,12 @@ func getDevicePath(ctx context.Context, volumePath string) (string, error) {
 	if err != nil {
 		util.ErrorLog(ctx, "failed to find image metadata: %v", err)
 	}
-	device, found := findDeviceMappingImage(ctx, imgInfo.Pool, imgInfo.RadosNamespace, imgInfo.ImageName, imgInfo.NbdAccess)
+	device, found := findDeviceMappingImage(
+		ctx,
+		imgInfo.Pool,
+		imgInfo.RadosNamespace,
+		imgInfo.ImageName,
+		imgInfo.NbdAccess)
 	if found {
 		return device, nil
 	}
@@ -760,7 +818,9 @@ func getDevicePath(ctx context.Context, volumePath string) (string, error) {
 }
 
 // NodeGetCapabilities returns the supported capabilities of the node server.
-func (ns *NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+func (ns *NodeServer) NodeGetCapabilities(
+	ctx context.Context,
+	req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
 	return &csi.NodeGetCapabilitiesResponse{
 		Capabilities: []*csi.NodeServiceCapability{
 			{
@@ -788,7 +848,10 @@ func (ns *NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetC
 	}, nil
 }
 
-func (ns *NodeServer) processEncryptedDevice(ctx context.Context, volOptions *rbdVolume, devicePath string) (string, error) {
+func (ns *NodeServer) processEncryptedDevice(
+	ctx context.Context,
+	volOptions *rbdVolume,
+	devicePath string) (string, error) {
 	imageSpec := volOptions.String()
 	encrypted, err := volOptions.checkRbdImageEncrypted(ctx)
 	if err != nil {
@@ -878,7 +941,9 @@ func (ns *NodeServer) xfsSupportsReflink() bool {
 }
 
 // NodeGetVolumeStats returns volume stats.
-func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+func (ns *NodeServer) NodeGetVolumeStats(
+	ctx context.Context,
+	req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
 	var err error
 	targetPath := req.GetVolumePath()
 	if targetPath == "" {

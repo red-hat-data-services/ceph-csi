@@ -22,6 +22,7 @@ func init() {
 	flag.BoolVar(&deployRBD, "deploy-rbd", true, "deploy rbd csi driver")
 	flag.BoolVar(&testCephFS, "test-cephfs", true, "test cephfs csi driver")
 	flag.BoolVar(&testRBD, "test-rbd", true, "test rbd csi driver")
+	flag.BoolVar(&helmTest, "helm-test", false, "tests running on deployment via helm")
 	flag.BoolVar(&upgradeTesting, "upgrade-testing", false, "perform upgrade testing")
 	flag.StringVar(&upgradeVersion, "upgrade-version", "v3.3.1", "target version for upgrade testing")
 	flag.StringVar(&cephCSINamespace, "cephcsi-namespace", defaultNs, "namespace in which cephcsi deployed")
@@ -44,6 +45,7 @@ func setDefaultKubeconfig() {
 }
 
 func TestE2E(t *testing.T) {
+	t.Parallel()
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "E2e Suite")
 }
@@ -54,5 +56,5 @@ func handleFlags() {
 	framework.RegisterClusterFlags(flag.CommandLine)
 	testing.Init()
 	flag.Parse()
-	initResouces()
+	initResources()
 }

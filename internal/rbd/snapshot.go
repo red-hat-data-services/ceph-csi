@@ -23,7 +23,11 @@ import (
 	"github.com/ceph/ceph-csi/internal/util"
 )
 
-func createRBDClone(ctx context.Context, parentVol, cloneRbdVol *rbdVolume, snap *rbdSnapshot, cr *util.Credentials) error {
+func createRBDClone(
+	ctx context.Context,
+	parentVol, cloneRbdVol *rbdVolume,
+	snap *rbdSnapshot,
+	cr *util.Credentials) error {
 	// create snapshot
 	err := parentVol.createSnapshot(ctx, snap)
 	if err != nil {
@@ -35,8 +39,17 @@ func createRBDClone(ctx context.Context, parentVol, cloneRbdVol *rbdVolume, snap
 	// create clone image and delete snapshot
 	err = cloneRbdVol.cloneRbdImageFromSnapshot(ctx, snap, parentVol)
 	if err != nil {
-		util.ErrorLog(ctx, "failed to clone rbd image %s from snapshot %s: %v", cloneRbdVol.RbdImageName, snap.RbdSnapName, err)
-		err = fmt.Errorf("failed to clone rbd image %s from snapshot %s: %w", cloneRbdVol.RbdImageName, snap.RbdSnapName, err)
+		util.ErrorLog(
+			ctx,
+			"failed to clone rbd image %s from snapshot %s: %v",
+			cloneRbdVol.RbdImageName,
+			snap.RbdSnapName,
+			err)
+		err = fmt.Errorf(
+			"failed to clone rbd image %s from snapshot %s: %w",
+			cloneRbdVol.RbdImageName,
+			snap.RbdSnapName,
+			err)
 	}
 	errSnap := parentVol.deleteSnapshot(ctx, snap)
 	if errSnap != nil {
@@ -61,21 +74,32 @@ func createRBDClone(ctx context.Context, parentVol, cloneRbdVol *rbdVolume, snap
 	return nil
 }
 
-func cleanUpSnapshot(ctx context.Context, parentVol *rbdVolume, rbdSnap *rbdSnapshot, rbdVol *rbdVolume, cr *util.Credentials) error {
+// cleanUpSnapshot removes the RBD-snapshot (rbdSnap) from the RBD-image
+// (parentVol) and deletes the RBD-image rbdVol.
+func cleanUpSnapshot(
+	ctx context.Context,
+	parentVol *rbdVolume,
+	rbdSnap *rbdSnapshot,
+	rbdVol *rbdVolume,
+	cr *util.Credentials) error {
 	err := parentVol.deleteSnapshot(ctx, rbdSnap)
 	if err != nil {
 		if !errors.Is(err, ErrSnapNotFound) {
-			util.ErrorLog(ctx, "failed to delete snapshot: %v", err)
+			util.ErrorLog(ctx, "failed to delete snapshot %q: %v", rbdSnap, err)
 			return err
 		}
 	}
-	err = deleteImage(ctx, rbdVol, cr)
-	if err != nil {
-		if !errors.Is(err, ErrImageNotFound) {
-			util.ErrorLog(ctx, "failed to delete rbd image: %s/%s with error: %v", rbdVol.Pool, rbdVol.VolName, err)
-			return err
+
+	if rbdVol != nil {
+		err := deleteImage(ctx, rbdVol, cr)
+		if err != nil {
+			if !errors.Is(err, ErrImageNotFound) {
+				util.ErrorLog(ctx, "failed to delete rbd image %q with error: %v", rbdVol, err)
+				return err
+			}
 		}
 	}
+
 	return nil
 }
 
@@ -96,7 +120,12 @@ func generateVolFromSnap(rbdSnap *rbdSnapshot) *rbdVolume {
 	return vol
 }
 
-func undoSnapshotCloning(ctx context.Context, parentVol *rbdVolume, rbdSnap *rbdSnapshot, cloneVol *rbdVolume, cr *util.Credentials) error {
+func undoSnapshotCloning(
+	ctx context.Context,
+	parentVol *rbdVolume,
+	rbdSnap *rbdSnapshot,
+	cloneVol *rbdVolume,
+	cr *util.Credentials) error {
 	err := cleanUpSnapshot(ctx, parentVol, rbdSnap, cloneVol, cr)
 	if err != nil {
 		util.ErrorLog(ctx, "failed to clean up  %s or %s: %v", cloneVol, rbdSnap, err)

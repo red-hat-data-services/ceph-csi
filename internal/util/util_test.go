@@ -21,6 +21,7 @@ import (
 )
 
 func TestRoundOffBytes(t *testing.T) {
+	t.Parallel()
 	type args struct {
 		bytes int64
 	}
@@ -75,6 +76,7 @@ func TestRoundOffBytes(t *testing.T) {
 	for _, tt := range tests {
 		ts := tt
 		t.Run(ts.name, func(t *testing.T) {
+			t.Parallel()
 			if got := RoundOffBytes(ts.args.bytes); got != ts.want {
 				t.Errorf("RoundOffBytes() = %v, want %v", got, ts.want)
 			}
@@ -83,6 +85,7 @@ func TestRoundOffBytes(t *testing.T) {
 }
 
 func TestRoundOffVolSize(t *testing.T) {
+	t.Parallel()
 	type args struct {
 		size int64
 	}
@@ -137,6 +140,7 @@ func TestRoundOffVolSize(t *testing.T) {
 	for _, tt := range tests {
 		ts := tt
 		t.Run(ts.name, func(t *testing.T) {
+			t.Parallel()
 			if got := RoundOffVolSize(ts.args.size); got != ts.want {
 				t.Errorf("RoundOffVolSize() = %v, want %v", got, ts.want)
 			}
@@ -145,6 +149,7 @@ func TestRoundOffVolSize(t *testing.T) {
 }
 
 func TestGetKernelVersion(t *testing.T) {
+	t.Parallel()
 	version, err := GetKernelVersion()
 	if err != nil {
 		t.Errorf("failed to get kernel version: %s", err)
@@ -158,6 +163,7 @@ func TestGetKernelVersion(t *testing.T) {
 }
 
 func TestMountOptionsAdd(t *testing.T) {
+	t.Parallel()
 	moaTests := []struct {
 		name         string
 		mountOptions string
@@ -228,7 +234,9 @@ func TestMountOptionsAdd(t *testing.T) {
 
 	for _, moaTest := range moaTests {
 		mt := moaTest
+		moaTest := moaTest
 		t.Run(moaTest.name, func(t *testing.T) {
+			t.Parallel()
 			result := MountOptionsAdd(mt.mountOptions, mt.option...)
 			if result != mt.result {
 				t.Errorf("MountOptionsAdd(): %v, want %v", result, mt.result)
@@ -236,7 +244,38 @@ func TestMountOptionsAdd(t *testing.T) {
 		})
 	}
 }
+
+func TestParseKernelRelease(t *testing.T) {
+	t.Parallel()
+
+	badReleases := []string{"x", "5", "5.", "5.4.", "5.x-2-oops", "4.1.x-7-oh", "5.12.x"}
+	for _, release := range badReleases {
+		_, _, _, _, err := parseKernelRelease(release)
+		if err == nil {
+			t.Errorf("release %q must not be parsed successfully", release)
+		}
+	}
+
+	goodReleases := []string{"5.12", "5.12xlinux", "5.1-2-yam", "3.1-5-x", "5.12.14", "5.12.14xlinux",
+		"5.12.14-xlinux", "5.12.14-99-x", "3.3x-3"}
+	goodVersions := [][]int{{5, 12, 0, 0}, {5, 12, 0, 0}, {5, 1, 0, 2}, {3, 1, 0, 5},
+		{5, 12, 14, 0}, {5, 12, 14, 0}, {5, 12, 14, 0}, {5, 12, 14, 99}, {3, 3, 0, 0}}
+	for i, release := range goodReleases {
+		version, patchlevel, sublevel, extraversion, err := parseKernelRelease(release)
+		if err != nil {
+			t.Errorf("parsing error for release %q: %w", release, err)
+		}
+		good := goodVersions[i]
+		if version != good[0] || patchlevel != good[1] || sublevel != good[2] || extraversion != good[3] {
+			t.Errorf("release %q parsed incorrectly: expected (%d.%d.%d-%d), actual (%d.%d.%d-%d)",
+				release, good[0], good[1], good[2], good[3],
+				version, patchlevel, sublevel, extraversion)
+		}
+	}
+}
+
 func TestCheckKernelSupport(t *testing.T) {
+	t.Parallel()
 	supportsQuota := []string{
 		"4.17.0",
 		"5.0.0",
