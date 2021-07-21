@@ -48,11 +48,12 @@ const (
 
 	// use default namespace if namespace is not set.
 	defaultNS = "default"
+
+	defaultPluginPath  = "/var/lib/kubelet/plugins"
+	defaultStagingPath = defaultPluginPath + "/kubernetes.io/csi/pv/"
 )
 
-var (
-	conf util.Config
-)
+var conf util.Config
 
 func init() {
 	// common flags
@@ -61,6 +62,8 @@ func init() {
 	flag.StringVar(&conf.DriverName, "drivername", "", "name of the driver")
 	flag.StringVar(&conf.DriverNamespace, "drivernamespace", defaultNS, "namespace in which driver is deployed")
 	flag.StringVar(&conf.NodeID, "nodeid", "", "node id")
+	flag.StringVar(&conf.PluginPath, "pluginpath", defaultPluginPath, "plugin path")
+	flag.StringVar(&conf.StagingPath, "stagingpath", defaultStagingPath, "staging path")
 	flag.StringVar(&conf.InstanceID, "instanceid", "", "Unique ID distinguishing this instance of Ceph CSI among other"+
 		" instances, when sharing Ceph clusters across CSI instances for provisioning")
 	flag.IntVar(&conf.PidLimit, "pidlimit", 0, "the PID limit to configure through cgroups")

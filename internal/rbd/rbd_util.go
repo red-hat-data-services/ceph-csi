@@ -165,20 +165,18 @@ type imageFeature struct {
 	dependsOn []string
 }
 
-var (
-	supportedFeatures = map[string]imageFeature{
-		librbd.FeatureNameLayering: {
-			needRbdNbd: false,
-		},
-		librbd.FeatureNameExclusiveLock: {
-			needRbdNbd: true,
-		},
-		librbd.FeatureNameJournaling: {
-			needRbdNbd: true,
-			dependsOn:  []string{librbd.FeatureNameExclusiveLock},
-		},
-	}
-)
+var supportedFeatures = map[string]imageFeature{
+	librbd.FeatureNameLayering: {
+		needRbdNbd: false,
+	},
+	librbd.FeatureNameExclusiveLock: {
+		needRbdNbd: true,
+	},
+	librbd.FeatureNameJournaling: {
+		needRbdNbd: true,
+		dependsOn:  []string{librbd.FeatureNameExclusiveLock},
+	},
+}
 
 // Connect an rbdVolume to the Ceph cluster.
 func (ri *rbdImage) Connect(cr *util.Credentials) error {
@@ -267,7 +265,7 @@ func createImage(ctx context.Context, pOpts *rbdVolume, cr *util.Credentials) er
 	if pOpts.isEncrypted() {
 		err = pOpts.setupEncryption(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to setup encryption for image %s: %v", pOpts, err)
+			return fmt.Errorf("failed to setup encryption for image %s: %w", pOpts, err)
 		}
 	}
 
@@ -491,7 +489,6 @@ func addRbdManagerTask(ctx context.Context, pOpts *rbdVolume, arg []string) (boo
 		pOpts.Pool)
 	supported := true
 	_, stderr, err := util.ExecCommand(ctx, "ceph", args...)
-
 	if err != nil {
 		switch {
 		case strings.Contains(stderr, rbdTaskRemoveCmdInvalidString1) &&
@@ -547,7 +544,8 @@ func deleteImage(ctx context.Context, pOpts *rbdVolume, cr *util.Credentials) er
 	}
 
 	// attempt to use Ceph manager based deletion support if available
-	args := []string{"trash", "remove",
+	args := []string{
+		"trash", "remove",
 		pOpts.Pool + "/" + pOpts.ImageID,
 		"--id", cr.ID,
 		"--keyfile=" + cr.KeyFile,
@@ -1382,6 +1380,7 @@ type rbdImageMetadataStash struct {
 	UnmapOptions   string `json:"unmapOptions"`
 	NbdAccess      bool   `json:"accessType"`
 	Encrypted      bool   `json:"encrypted"`
+	DevicePath     string `json:"device"` // holds NBD device path for now
 }
 
 // file name in which image metadata is stashed.
@@ -1397,8 +1396,8 @@ func (ri *rbdImageMetadataStash) String() string {
 
 // stashRBDImageMetadata stashes required fields into the stashFileName at the passed in path, in
 // JSON format.
-func stashRBDImageMetadata(volOptions *rbdVolume, path string) error {
-	var imgMeta = rbdImageMetadataStash{
+func stashRBDImageMetadata(volOptions *rbdVolume, metaDataPath string) error {
+	imgMeta := rbdImageMetadataStash{
 		// there are no checks for this at present
 		Version:        3, // nolint:gomnd // number specifies version.
 		Pool:           volOptions.Pool,
@@ -1418,8 +1417,8 @@ func stashRBDImageMetadata(volOptions *rbdVolume, path string) error {
 		return fmt.Errorf("failed to marshall JSON image metadata for image (%s): %w", volOptions, err)
 	}
 
-	fPath := filepath.Join(path, stashFileName)
-	err = ioutil.WriteFile(fPath, encodedBytes, 0600)
+	fPath := filepath.Join(metaDataPath, stashFileName)
+	err = ioutil.WriteFile(fPath, encodedBytes, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to stash JSON image metadata for image (%s) at path (%s): %w", volOptions, fPath, err)
 	}
@@ -1428,10 +1427,10 @@ func stashRBDImageMetadata(volOptions *rbdVolume, path string) error {
 }
 
 // lookupRBDImageMetadataStash reads and returns stashed image metadata at passed in path.
-func lookupRBDImageMetadataStash(path string) (rbdImageMetadataStash, error) {
+func lookupRBDImageMetadataStash(metaDataPath string) (rbdImageMetadataStash, error) {
 	var imgMeta rbdImageMetadataStash
 
-	fPath := filepath.Join(path, stashFileName)
+	fPath := filepath.Join(metaDataPath, stashFileName)
 	encodedBytes, err := ioutil.ReadFile(fPath) // #nosec - intended reading from fPath
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -1449,9 +1448,35 @@ func lookupRBDImageMetadataStash(path string) (rbdImageMetadataStash, error) {
 	return imgMeta, nil
 }
 
+// updateRBDImageMetadataStash reads and updates stashFile with the required
+// fields at the passed in path, in JSON format.
+func updateRBDImageMetadataStash(metaDataPath, device string) error {
+	if device == "" {
+		return errors.New("device is empty")
+	}
+	imgMeta, err := lookupRBDImageMetadataStash(metaDataPath)
+	if err != nil {
+		return fmt.Errorf("failed to find image metadata: %w", err)
+	}
+	imgMeta.DevicePath = device
+
+	encodedBytes, err := json.Marshal(imgMeta)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON image metadata for spec:(%s) : %w", imgMeta.String(), err)
+	}
+
+	fPath := filepath.Join(metaDataPath, stashFileName)
+	err = ioutil.WriteFile(fPath, encodedBytes, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to stash JSON image metadata at path: (%s) for spec:(%s) : %w",
+			fPath, imgMeta.String(), err)
+	}
+	return nil
+}
+
 // cleanupRBDImageMetadataStash cleans up any stashed metadata at passed in path.
-func cleanupRBDImageMetadataStash(path string) error {
-	fPath := filepath.Join(path, stashFileName)
+func cleanupRBDImageMetadataStash(metaDataPath string) error {
+	fPath := filepath.Join(metaDataPath, stashFileName)
 	if err := os.Remove(fPath); err != nil {
 		return fmt.Errorf("failed to cleanup stashed JSON data (%s): %w", fPath, err)
 	}
@@ -1554,10 +1579,10 @@ func (ri *rbdImage) setThinProvisioned() error {
 // the expansion can be allocated too.
 func (ri *rbdImage) isThickProvisioned() (bool, error) {
 	value, err := ri.GetMetadata(thickProvisionMetaKey)
-	if err == librbd.ErrNotFound {
+	if errors.Is(err, librbd.ErrNotFound) {
 		// check if the image is having deprecated metadata key.
 		value, err = ri.GetMetadata(deprecatedthickProvisionMetaKey)
-		if err == librbd.ErrNotFound {
+		if errors.Is(err, librbd.ErrNotFound) {
 			return false, nil
 		}
 		// If we reach here means the image has deprecated metakey set. Set the

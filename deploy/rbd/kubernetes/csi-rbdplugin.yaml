@@ -51,6 +51,8 @@ spec:
           image: quay.io/cephcsi/cephcsi:canary
           args:
             - "--nodeid=$(NODE_ID)"
+            - "--pluginpath=/var/lib/kubelet/plugins"
+            - "--stagingpath=/var/lib/kubelet/plugins/kubernetes.io/csi/pv/"
             - "--type=rbd"
             - "--nodeserver=true"
             - "--endpoint=$(CSI_ENDPOINT)"

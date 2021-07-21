@@ -13,11 +13,13 @@ import (
 	"time"
 
 	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
+	batch "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	scv1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/util/wait"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
@@ -262,7 +264,8 @@ func validateNormalUserPVCAccess(pvcPath string, f *framework.Framework) error {
 					VolumeSource: v1.VolumeSource{
 						PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{
 							ClaimName: pvc.Name,
-							ReadOnly:  false},
+							ReadOnly:  false,
+						},
 					},
 				},
 			},
@@ -477,7 +480,7 @@ func addTopologyDomainsToDSYaml(template, labels string) string {
 }
 
 func oneReplicaDeployYaml(template string) string {
-	var re = regexp.MustCompile(`(\s+replicas:) \d+`)
+	re := regexp.MustCompile(`(\s+replicas:) \d+`)
 	return re.ReplaceAllString(template, `$1 1`)
 }
 
@@ -1033,17 +1036,17 @@ func validateController(f *framework.Framework, pvcPath, appPath, scPath string)
 	// create storageclass with retain
 	err = createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, nil, retainPolicy)
 	if err != nil {
-		return fmt.Errorf("failed to create storageclass with error %v", err)
+		return fmt.Errorf("failed to create storageclass: %w", err)
 	}
 
 	// create pvc
 	pvc, err := loadPVC(pvcPath)
 	if err != nil {
-		return fmt.Errorf("failed to load PVC with error %v", err)
+		return fmt.Errorf("failed to load PVC: %w", err)
 	}
 	resizePvc, err := loadPVC(pvcPath)
 	if err != nil {
-		return fmt.Errorf("failed to load PVC with error %v", err)
+		return fmt.Errorf("failed to load PVC: %w", err)
 	}
 	resizePvc.Namespace = f.UniqueName
 
@@ -1051,21 +1054,21 @@ func validateController(f *framework.Framework, pvcPath, appPath, scPath string)
 	pvc.Namespace = f.UniqueName
 	err = createPVCAndvalidatePV(f.ClientSet, pvc, deployTimeout)
 	if err != nil {
-		return fmt.Errorf("failed to create PVC with error %v", err)
+		return fmt.Errorf("failed to create PVC: %w", err)
 	}
 	// get pvc and pv object
 	pvc, pv, err := getPVCAndPV(f.ClientSet, pvc.Name, pvc.Namespace)
 	if err != nil {
-		return fmt.Errorf("failed to get PVC with error %v", err)
+		return fmt.Errorf("failed to get PVC: %w", err)
 	}
 	// Recreate storageclass with delete policy
 	err = deleteResource(scPath)
 	if err != nil {
-		return fmt.Errorf("failed to delete storageclass with error %v", err)
+		return fmt.Errorf("failed to delete storageclass: %w", err)
 	}
 	err = createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, nil, deletePolicy)
 	if err != nil {
-		return fmt.Errorf("failed to create storageclass with error %v", err)
+		return fmt.Errorf("failed to create storageclass: %w", err)
 	}
 	// delete omap data
 	err = deletePVCImageJournalInPool(f, pvc, poolName)
@@ -1079,7 +1082,7 @@ func validateController(f *framework.Framework, pvcPath, appPath, scPath string)
 	// delete pvc and pv
 	err = deletePVCAndPV(f.ClientSet, pvc, pv, deployTimeout)
 	if err != nil {
-		return fmt.Errorf("failed to delete PVC or PV with error %v", err)
+		return fmt.Errorf("failed to delete PVC or PV: %w", err)
 	}
 	// create pvc and pv with application
 	pv.Spec.ClaimRef = nil
@@ -1089,7 +1092,7 @@ func validateController(f *framework.Framework, pvcPath, appPath, scPath string)
 	pv.ResourceVersion = ""
 	err = createPVCAndPV(f.ClientSet, pvc, pv)
 	if err != nil {
-		e2elog.Failf("failed to create PVC or PV with error %v", err)
+		e2elog.Failf("failed to create PVC or PV: %v", err)
 	}
 	// bind PVC to application
 	app, err := loadApp(appPath)
@@ -1153,4 +1156,97 @@ func k8sVersionGreaterEquals(c kubernetes.Interface, major, minor int) bool {
 	min := fmt.Sprintf("%d", minor)
 
 	return (v.Major > maj) || (v.Major == maj && v.Minor >= min)
+}
+
+// waitForJobCompletion polls the status of the given job and waits until the
+// jobs has succeeded or until the timeout is hit.
+func waitForJobCompletion(c kubernetes.Interface, ns, job string, timeout int) error {
+	t := time.Duration(timeout) * time.Minute
+	start := time.Now()
+
+	e2elog.Logf("waiting for Job %s/%s to be in state %q", ns, job, batch.JobComplete)
+
+	return wait.PollImmediate(poll, t, func() (bool, error) {
+		j, err := c.BatchV1().Jobs(ns).Get(context.TODO(), job, metav1.GetOptions{})
+		if err != nil {
+			if isRetryableAPIError(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to get Job: %w", err)
+		}
+
+		if j.Status.CompletionTime != nil {
+			// Job has successfully completed
+			return true, nil
+		}
+
+		e2elog.Logf(
+			"Job %s/%s has not completed yet (%d seconds elapsed)",
+			ns, job, int(time.Since(start).Seconds()))
+		return false, nil
+	})
+}
+
+// kubectlAction is used to tell retryKubectlInput() what action needs to be
+// done.
+type kubectlAction string
+
+const (
+	// kubectlCreate tells retryKubectlInput() to run "create"
+	kubectlCreate = kubectlAction("create")
+	// kubectlDelete tells retryKubectlInput() to run "delete"
+	kubectlDelete = kubectlAction("delete")
+)
+
+// String returns the string format of the kubectlAction, this is automatically
+// used when formatting strings with %s or %q.
+func (ka kubectlAction) String() string {
+	return string(ka)
+}
+
+// retryKubectlInput takes a namespace and action telling kubectl what to do,
+// it then feeds data through stdin to the process. This function retries until
+// no error occurred, or the timeout passed.
+func retryKubectlInput(namespace string, action kubectlAction, data string, t int) error {
+	timeout := time.Duration(t) * time.Minute
+	e2elog.Logf("waiting for kubectl (%s) to finish", action)
+	start := time.Now()
+	return wait.PollImmediate(poll, timeout, func() (bool, error) {
+		_, err := framework.RunKubectlInput(namespace, data, string(action), "-f", "-")
+		if err != nil {
+			if isRetryableAPIError(err) {
+				return false, nil
+			}
+			e2elog.Logf(
+				"will run kubectl (%s) again (%d seconds elapsed)",
+				action,
+				int(time.Since(start).Seconds()))
+			return false, fmt.Errorf("failed to run kubectl: %w", err)
+		}
+		return true, nil
+	})
+}
+
+// retryKubectlFile takes a namespace and action telling kubectl what to do
+// with the passed filename. This function retries until no error occurred, or
+// the timeout passed.
+func retryKubectlFile(namespace string, action kubectlAction, filename string, t int) error {
+	timeout := time.Duration(t) * time.Minute
+	e2elog.Logf("waiting for kubectl (%s -f %q) to finish", action, filename)
+	start := time.Now()
+	return wait.PollImmediate(poll, timeout, func() (bool, error) {
+		_, err := framework.RunKubectl(namespace, string(action), "-f", filename)
+		if err != nil {
+			if isRetryableAPIError(err) {
+				return false, nil
+			}
+			e2elog.Logf(
+				"will run kubectl (%s -f %q) again (%d seconds elapsed)",
+				action,
+				filename,
+				int(time.Since(start).Seconds()))
+			return false, fmt.Errorf("failed to run kubectl: %w", err)
+		}
+		return true, nil
+	})
 }

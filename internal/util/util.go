@@ -72,6 +72,7 @@ type Config struct {
 	NodeID          string // node id
 	InstanceID      string // unique ID distinguishing this instance of Ceph CSI
 	PluginPath      string // location of cephcsi plugin
+	StagingPath     string // location of cephcsi staging path
 	DomainLabels    string // list of domain labels to read from the node
 
 	// metrics related flags
@@ -273,7 +274,7 @@ func GenerateVolID(
 
 // CreateMountPoint creates the directory with given path.
 func CreateMountPoint(mountPath string) error {
-	return os.MkdirAll(mountPath, 0750)
+	return os.MkdirAll(mountPath, 0o750)
 }
 
 // checkDirExists checks directory  exists or not.

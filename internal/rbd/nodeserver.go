@@ -96,6 +96,54 @@ var (
 	xfsHasReflink = xfsReflinkUnset
 )
 
+// isHealerContext checks if the request is been made from volumeHealer.
+func isHealerContext(parameters map[string]string) bool {
+	var err error
+	healerContext := false
+
+	val, ok := parameters["volumeHealerContext"]
+	if ok {
+		if healerContext, err = strconv.ParseBool(val); err != nil {
+			return false
+		}
+	}
+	return healerContext
+}
+
+// isStaticVolume checks if the volume is static.
+func isStaticVolume(parameters map[string]string) bool {
+	var err error
+	staticVol := false
+
+	val, ok := parameters["staticVolume"]
+	if ok {
+		if staticVol, err = strconv.ParseBool(val); err != nil {
+			return false
+		}
+	}
+	return staticVol
+}
+
+// healerStageTransaction attempts to attach the rbd Image with previously
+// updated device path at stashFile.
+func healerStageTransaction(ctx context.Context, cr *util.Credentials, volOps *rbdVolume, metaDataPath string) error {
+	imgInfo, err := lookupRBDImageMetadataStash(metaDataPath)
+	if err != nil {
+		util.ErrorLog(ctx, "failed to find image metadata, at stagingPath: %s, err: %v", metaDataPath, err)
+		return err
+	}
+	if imgInfo.DevicePath == "" {
+		return fmt.Errorf("device is empty in image metadata, at stagingPath: %s", metaDataPath)
+	}
+	var devicePath string
+	devicePath, err = attachRBDImage(ctx, volOps, imgInfo.DevicePath, cr)
+	if err != nil {
+		return err
+	}
+	util.DebugLog(ctx, "rbd volID: %s was successfully attached to device: %s", volOps.VolID, devicePath)
+	return nil
+}
+
 // NodeStageVolume mounts the volume to a staging path on the node.
 // Implementation notes:
 // - stagingTargetPath is the directory passed in the request where the volume needs to be staged
@@ -110,6 +158,7 @@ var (
 //   - Create the staging file/directory under staging path
 //   - Stage the device (mount the device mapped for image)
 // TODO: make this function less complex.
+// nolint:gocyclo // reduce complexity
 func (ns *NodeServer) NodeStageVolume(
 	ctx context.Context,
 	req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
@@ -154,27 +203,24 @@ func (ns *NodeServer) NodeStageVolume(
 	stagingParentPath := req.GetStagingTargetPath()
 	stagingTargetPath := stagingParentPath + "/" + volID
 
-	// check is it a static volume
-	staticVol := false
-	val, ok := req.GetVolumeContext()["staticVolume"]
-	if ok {
-		if staticVol, err = strconv.ParseBool(val); err != nil {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+	isHealer := isHealerContext(req.GetVolumeContext())
+	if !isHealer {
+		var isNotMnt bool
+		// check if stagingPath is already mounted
+		isNotMnt, err = isNotMountPoint(ns.mounter, stagingTargetPath)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		} else if !isNotMnt {
+			util.DebugLog(ctx, "rbd: volume %s is already mounted to %s, skipping", volID, stagingTargetPath)
+			return &csi.NodeStageVolumeResponse{}, nil
 		}
 	}
 
-	// check if stagingPath is already mounted
-	isNotMnt, err := isNotMountPoint(ns.mounter, stagingTargetPath)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	} else if !isNotMnt {
-		util.DebugLog(ctx, "rbd: volume %s is already mounted to %s, skipping", volID, stagingTargetPath)
-		return &csi.NodeStageVolumeResponse{}, nil
-	}
+	isStaticVol := isStaticVolume(req.GetVolumeContext())
 
 	// throw error when imageFeatures parameter is missing or empty
 	// for backward compatibility, ignore error for non-static volumes from older cephcsi version
-	if imageFeatures, ok := req.GetVolumeContext()["imageFeatures"]; checkImageFeatures(imageFeatures, ok, staticVol) {
+	if imageFeatures, ok := req.GetVolumeContext()["imageFeatures"]; checkImageFeatures(imageFeatures, ok, isStaticVol) {
 		return nil, status.Error(codes.InvalidArgument, "missing required parameter imageFeatures")
 	}
 
@@ -187,10 +233,9 @@ func (ns *NodeServer) NodeStageVolume(
 
 	// get rbd image name from the volume journal
 	// for static volumes, the image name is actually the volume ID itself
-	switch {
-	case staticVol:
+	if isStaticVol {
 		volOptions.RbdImageName = volID
-	default:
+	} else {
 		var vi util.CSIIdentifier
 		var imageAttributes *journal.ImageAttributes
 		err = vi.DecomposeCSIID(volID)
@@ -216,11 +261,26 @@ func (ns *NodeServer) NodeStageVolume(
 	}
 
 	volOptions.VolID = volID
-	transaction := stageTransaction{}
-
 	volOptions.MapOptions = req.GetVolumeContext()["mapOptions"]
 	volOptions.UnmapOptions = req.GetVolumeContext()["unmapOptions"]
+	volOptions.Mounter = req.GetVolumeContext()["mounter"]
 
+	err = volOptions.Connect(cr)
+	if err != nil {
+		util.ErrorLog(ctx, "failed to connect to volume %s: %v", volOptions, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	defer volOptions.Destroy()
+
+	if isHealer {
+		err = healerStageTransaction(ctx, cr, volOptions, stagingParentPath)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+
+	transaction := stageTransaction{}
 	// Stash image details prior to mapping the image (useful during Unstage as it has no
 	// voloptions passed to the RPC as per the CSI spec)
 	err = stashRBDImageMetadata(volOptions, stagingParentPath)
@@ -235,7 +295,7 @@ func (ns *NodeServer) NodeStageVolume(
 
 	// perform the actual staging and if this fails, have undoStagingTransaction
 	// cleans up for us
-	transaction, err = ns.stageTransaction(ctx, req, volOptions, staticVol)
+	transaction, err = ns.stageTransaction(ctx, req, volOptions, isStaticVol)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -243,7 +303,7 @@ func (ns *NodeServer) NodeStageVolume(
 	util.DebugLog(
 		ctx,
 		"rbd: successfully mounted volume %s to stagingTargetPath %s",
-		req.GetVolumeId(),
+		volID,
 		stagingTargetPath)
 
 	return &csi.NodeStageVolumeResponse{}, nil
@@ -267,13 +327,6 @@ func (ns *NodeServer) stageTransaction(
 		return transaction, err
 	}
 	defer cr.DeleteCredentials()
-
-	err = volOptions.Connect(cr)
-	if err != nil {
-		util.ErrorLog(ctx, "failed to connect to volume %v: %v", volOptions.RbdImageName, err)
-		return transaction, err
-	}
-	defer volOptions.Destroy()
 
 	// Allow image to be mounted on multiple nodes if it is ROX
 	if req.VolumeCapability.AccessMode.Mode == csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY {
@@ -307,13 +360,25 @@ func (ns *NodeServer) stageTransaction(
 	}
 	// Mapping RBD image
 	var devicePath string
-	devicePath, err = attachRBDImage(ctx, volOptions, cr)
+	devicePath, err = attachRBDImage(ctx, volOptions, devicePath, cr)
 	if err != nil {
 		return transaction, err
 	}
 	transaction.devicePath = devicePath
+
 	util.DebugLog(ctx, "rbd image: %s/%s was successfully mapped at %s\n",
 		req.GetVolumeId(), volOptions.Pool, devicePath)
+
+	// userspace mounters like nbd need the device path as a reference while
+	// restarting the userspace processes on a nodeplugin restart. For kernel
+	// mounter(krbd) we don't need it as there won't be any process running
+	// in userspace, hence we don't store the device path for krbd devices.
+	if volOptions.Mounter == rbdNbdMounter {
+		err = updateRBDImageMetadataStash(req.GetStagingTargetPath(), devicePath)
+		if err != nil {
+			return transaction, err
+		}
+	}
 
 	if volOptions.isEncrypted() {
 		devicePath, err = ns.processEncryptedDevice(ctx, volOptions, devicePath)
@@ -342,7 +407,7 @@ func (ns *NodeServer) stageTransaction(
 
 	if !readOnly {
 		// #nosec - allow anyone to write inside the target path
-		err = os.Chmod(stagingTargetPath, 0777)
+		err = os.Chmod(stagingTargetPath, 0o777)
 	}
 	return transaction, err
 }
@@ -400,7 +465,7 @@ func (ns *NodeServer) undoStagingTransaction(
 func (ns *NodeServer) createStageMountPoint(ctx context.Context, mountPath string, isBlock bool) error {
 	if isBlock {
 		// #nosec:G304, intentionally creating file mountPath, not a security issue
-		pathFile, err := os.OpenFile(mountPath, os.O_CREATE|os.O_RDWR, 0600)
+		pathFile, err := os.OpenFile(mountPath, os.O_CREATE|os.O_RDWR, 0o600)
 		if err != nil {
 			util.ErrorLog(ctx, "failed to create mountPath:%s with error: %v", mountPath, err)
 			return status.Error(codes.Internal, err.Error())
@@ -413,7 +478,7 @@ func (ns *NodeServer) createStageMountPoint(ctx context.Context, mountPath strin
 		return nil
 	}
 
-	err := os.Mkdir(mountPath, 0750)
+	err := os.Mkdir(mountPath, 0o750)
 	if err != nil {
 		if !os.IsExist(err) {
 			util.ErrorLog(ctx, "failed to create mountPath:%s with error: %v", mountPath, err)
@@ -439,11 +504,8 @@ func (ns *NodeServer) NodePublishVolume(
 	volID := req.GetVolumeId()
 	stagingPath += "/" + volID
 
-	if acquired := ns.VolumeLocks.TryAcquire(volID); !acquired {
-		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, volID)
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, volID)
-	}
-	defer ns.VolumeLocks.Release(volID)
+	// Considering kubelet make sure the stage and publish operations
+	// are serialized, we dont need any extra locking in nodePublish
 
 	// Check if that target path exists properly
 	notMnt, err := ns.createTargetMountPath(ctx, targetPath, isBlock)
@@ -582,7 +644,7 @@ func (ns *NodeServer) createTargetMountPath(ctx context.Context, mountPath strin
 	}
 	if isBlock {
 		// #nosec
-		pathFile, e := os.OpenFile(mountPath, os.O_CREATE|os.O_RDWR, 0750)
+		pathFile, e := os.OpenFile(mountPath, os.O_CREATE|os.O_RDWR, 0o750)
 		if e != nil {
 			util.DebugLog(ctx, "Failed to create mountPath:%s with error: %v", mountPath, err)
 			return notMnt, status.Error(codes.Internal, e.Error())
@@ -611,14 +673,8 @@ func (ns *NodeServer) NodeUnpublishVolume(
 	}
 
 	targetPath := req.GetTargetPath()
-	volID := req.GetVolumeId()
-
-	if acquired := ns.VolumeLocks.TryAcquire(volID); !acquired {
-		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, volID)
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, volID)
-	}
-	defer ns.VolumeLocks.Release(volID)
-
+	// considering kubelet make sure node operations like unpublish/unstage...etc can not be called
+	// at same time, an explicit locking at time of nodeunpublish is not required.
 	notMnt, err := mount.IsNotMountPoint(ns.mounter, targetPath)
 	if err != nil {
 		if os.IsNotExist(err) {

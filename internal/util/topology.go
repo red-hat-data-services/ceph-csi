@@ -133,9 +133,7 @@ type TopologyConstrainedPool struct {
 // from a CSI CreateVolume request.
 func GetTopologyFromRequest(
 	req *csi.CreateVolumeRequest) (*[]TopologyConstrainedPool, *csi.TopologyRequirement, error) {
-	var (
-		topologyPools []TopologyConstrainedPool
-	)
+	var topologyPools []TopologyConstrainedPool
 
 	// check if parameters have pool configuration pertaining to topology
 	topologyPoolsStr := req.GetParameters()["topologyConstrainedPools"]
@@ -153,7 +151,7 @@ func GetTopologyFromRequest(
 	err := json.Unmarshal([]byte(strings.Replace(topologyPoolsStr, "\n", " ", -1)), &topologyPools)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
-			"failed to parse JSON encoded topology constrained pools parameter (%s): %v",
+			"failed to parse JSON encoded topology constrained pools parameter (%s): %w",
 			topologyPoolsStr,
 			err)
 	}

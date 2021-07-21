@@ -70,9 +70,7 @@ func getCredentialsForVolume(volOptions *volumeOptions, req *csi.NodeStageVolume
 func (ns *NodeServer) NodeStageVolume(
 	ctx context.Context,
 	req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
-	var (
-		volOptions *volumeOptions
-	)
+	var volOptions *volumeOptions
 	if err := util.ValidateNodeStageVolumeRequest(req); err != nil {
 		return nil, err
 	}
@@ -114,7 +112,6 @@ func (ns *NodeServer) NodeStageVolume(
 	// Check if the volume is already mounted
 
 	isMnt, err := util.IsMountPoint(stagingTargetPath)
-
 	if err != nil {
 		util.ErrorLog(ctx, "stat failed: %v", err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -184,7 +181,7 @@ func (*NodeServer) mount(ctx context.Context, volOptions *volumeOptions, req *cs
 	if !csicommon.MountOptionContains(kernelMountOptions, readOnly) &&
 		!csicommon.MountOptionContains(fuseMountOptions, readOnly) {
 		// #nosec - allow anyone to write inside the stagingtarget path
-		err = os.Chmod(stagingTargetPath, 0777)
+		err = os.Chmod(stagingTargetPath, 0o777)
 		if err != nil {
 			util.ErrorLog(
 				ctx,
@@ -220,11 +217,8 @@ func (ns *NodeServer) NodePublishVolume(
 	targetPath := req.GetTargetPath()
 	volID := req.GetVolumeId()
 
-	if acquired := ns.VolumeLocks.TryAcquire(volID); !acquired {
-		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, volID)
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, volID)
-	}
-	defer ns.VolumeLocks.Release(volID)
+	// Considering kubelet make sure the stage and publish operations
+	// are serialized, we dont need any extra locking in nodePublish
 
 	if err := util.CreateMountPoint(targetPath); err != nil {
 		util.ErrorLog(ctx, "failed to create mount point at %s: %v", targetPath, err)
@@ -240,7 +234,6 @@ func (ns *NodeServer) NodePublishVolume(
 	// Check if the volume is already mounted
 
 	isMnt, err := util.IsMountPoint(targetPath)
-
 	if err != nil {
 		util.ErrorLog(ctx, "stat failed: %v", err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -271,16 +264,9 @@ func (ns *NodeServer) NodeUnpublishVolume(
 	if err = util.ValidateNodeUnpublishVolumeRequest(req); err != nil {
 		return nil, err
 	}
-
-	volID := req.GetVolumeId()
+	// considering kubelet make sure node operations like unpublish/unstage...etc can not be called
+	// at same time, an explicit locking at time of nodeunpublish is not required.
 	targetPath := req.GetTargetPath()
-
-	if acquired := ns.VolumeLocks.TryAcquire(volID); !acquired {
-		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, volID)
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, volID)
-	}
-	defer ns.VolumeLocks.Release(volID)
-
 	isMnt, err := util.IsMountPoint(targetPath)
 	if err != nil {
 		if os.IsNotExist(err) {
