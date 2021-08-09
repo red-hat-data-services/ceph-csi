@@ -71,9 +71,23 @@ func getMons(ns string, c kubernetes.Interface) ([]string, error) {
 	}
 	services := make([]string, 0)
 
-	svcList, err := c.CoreV1().Services(ns).List(context.TODO(), opt)
+	var svcList *v1.ServiceList
+	t := time.Duration(deployTimeout) * time.Minute
+	err := wait.PollImmediate(poll, t, func() (bool, error) {
+		var svcErr error
+		svcList, svcErr = c.CoreV1().Services(ns).List(context.TODO(), opt)
+		if svcErr != nil {
+			if isRetryableAPIError(svcErr) {
+				return false, nil
+			}
+
+			return false, fmt.Errorf("failed to list Services in namespace %q: %w", ns, svcErr)
+		}
+
+		return true, nil
+	})
 	if err != nil {
-		return services, fmt.Errorf("failed to list services: %w", err)
+		return services, fmt.Errorf("could not get Services: %w", err)
 	}
 	for i := range svcList.Items {
 		s := fmt.Sprintf(
@@ -83,12 +97,14 @@ func getMons(ns string, c kubernetes.Interface) ([]string, error) {
 			svcList.Items[i].Spec.Ports[0].Port)
 		services = append(services, s)
 	}
+
 	return services, nil
 }
 
 func getStorageClass(path string) (scv1.StorageClass, error) {
 	sc := scv1.StorageClass{}
 	err := unmarshal(path, &sc)
+
 	return sc, err
 }
 
@@ -102,6 +118,7 @@ func getSecret(path string) (v1.Secret, error) {
 			return sc, err
 		}
 	}
+
 	return sc, nil
 }
 
@@ -110,10 +127,11 @@ func deleteResource(scPath string) error {
 	if err != nil {
 		e2elog.Logf("failed to read content from %s %v", scPath, err)
 	}
-	_, err = framework.RunKubectlInput(cephCSINamespace, data, ns, "delete", "-f", "-")
+	err = retryKubectlInput(cephCSINamespace, kubectlDelete, data, deployTimeout)
 	if err != nil {
 		e2elog.Logf("failed to delete %s %v", scPath, err)
 	}
+
 	return err
 }
 
@@ -128,6 +146,7 @@ func unmarshal(fileName string, obj interface{}) error {
 	}
 
 	err = json.Unmarshal(data, obj)
+
 	return err
 }
 
@@ -149,6 +168,7 @@ func createPVCAndApp(
 		return err
 	}
 	err = createApp(f.ClientSet, app, deployTimeout)
+
 	return err
 }
 
@@ -166,6 +186,7 @@ func deletePVCAndApp(name string, f *framework.Framework, pvc *v1.PersistentVolu
 		return err
 	}
 	err = deletePVCAndValidatePV(f.ClientSet, pvc, deployTimeout)
+
 	return err
 }
 
@@ -199,6 +220,7 @@ func validatePVCAndAppBinding(pvcPath, appPath string, f *framework.Framework) e
 		return err
 	}
 	err = deletePVCAndApp("", f, pvc, app)
+
 	return err
 }
 
@@ -214,6 +236,7 @@ func getMountType(appName, appNamespace, mountPath string, f *framework.Framewor
 	if stdErr != "" {
 		return strings.TrimSpace(stdOut), fmt.Errorf(stdErr)
 	}
+
 	return strings.TrimSpace(stdOut), nil
 }
 
@@ -245,7 +268,7 @@ func validateNormalUserPVCAccess(pvcPath string, f *framework.Framework) error {
 			Containers: []v1.Container{
 				{
 					Name:    "write-pod",
-					Image:   "registry.centos.org/centos:latest",
+					Image:   "quay.io/centos/centos:latest",
 					Command: []string{"/bin/sleep", "999999"},
 					SecurityContext: &v1.SecurityContext{
 						RunAsUser: &user,
@@ -306,6 +329,7 @@ func validateNormalUserPVCAccess(pvcPath string, f *framework.Framework) error {
 	}
 
 	err = deletePVCAndValidatePV(f.ClientSet, pvc, deployTimeout)
+
 	return err
 }
 
@@ -393,6 +417,7 @@ func checkDataPersist(pvcPath, appPath string, f *framework.Framework) error {
 	}
 
 	err = deletePVCAndApp("", f, pvc, app)
+
 	return err
 }
 
@@ -429,6 +454,7 @@ func pvcDeleteWhenPoolNotFound(pvcPath string, cephfs bool, f *framework.Framewo
 		}
 	}
 	err = deletePVCAndValidatePV(f.ClientSet, pvc, deployTimeout)
+
 	return err
 }
 
@@ -471,6 +497,7 @@ func checkMountOptions(pvcPath, appPath string, f *framework.Framework, mountFla
 	}
 
 	err = deletePVCAndApp("", f, pvc, app)
+
 	return err
 }
 
@@ -481,6 +508,7 @@ func addTopologyDomainsToDSYaml(template, labels string) string {
 
 func oneReplicaDeployYaml(template string) string {
 	re := regexp.MustCompile(`(\s+replicas:) \d+`)
+
 	return re.ReplaceAllString(template, `$1 1`)
 }
 
@@ -494,12 +522,14 @@ func writeDataAndCalChecksum(app *v1.Pod, opt *metav1.ListOptions, f *framework.
 	err := writeDataInPod(app, opt, f)
 	if err != nil {
 		e2elog.Logf("failed to write data in the pod with error %v", err)
+
 		return "", err
 	}
 
 	checkSum, err := calculateSHA512sum(f, app, filePath, opt)
 	if err != nil {
 		e2elog.Logf("failed to calculate checksum with error %v", err)
+
 		return checkSum, err
 	}
 
@@ -507,10 +537,11 @@ func writeDataAndCalChecksum(app *v1.Pod, opt *metav1.ListOptions, f *framework.
 	if err != nil {
 		e2elog.Failf("failed to delete pod with error %v", err)
 	}
+
 	return checkSum, nil
 }
 
-// nolint:gocyclo,gocognit,nestif // reduce complexity
+// nolint:gocyclo,gocognit,nestif,cyclop // reduce complexity
 func validatePVCClone(
 	totalCount int,
 	sourcePvcPath, sourceAppPath, clonePvcPath, clonePvcAppPath string,
@@ -690,6 +721,12 @@ func validatePVCClone(
 							wgErrs[n] = fmt.Errorf("passphrase found in vault while should be deleted: %s", stdOut)
 						}
 					}
+					if wgErrs[n] == nil && kms.canVerifyKeyDestroyed() {
+						destroyed, msg := kms.verifyKeyDestroyed(f, imageData.csiVolumeHandle)
+						if !destroyed {
+							wgErrs[n] = fmt.Errorf("passphrased was not destroyed: %s", msg)
+						}
+					}
 				}
 			}
 			wg.Done()
@@ -711,7 +748,7 @@ func validatePVCClone(
 	validateRBDImageCount(f, 0, defaultRBDPool)
 }
 
-// nolint:gocyclo,gocognit,nestif // reduce complexity
+// nolint:gocyclo,gocognit,nestif,cyclop // reduce complexity
 func validatePVCSnapshot(
 	totalCount int,
 	pvcPath, appPath, snapshotPath, pvcClonePath, appClonePath string,
@@ -970,6 +1007,12 @@ func validatePVCSnapshot(
 							wgErrs[n] = fmt.Errorf("passphrase found in vault while should be deleted: %s", stdOut)
 						}
 					}
+					if wgErrs[n] == nil && kms.canVerifyKeyDestroyed() {
+						destroyed, msg := kms.verifyKeyDestroyed(f, *content.Status.SnapshotHandle)
+						if !destroyed {
+							wgErrs[n] = fmt.Errorf("passphrased was not destroyed: %s", msg)
+						}
+					}
 				}
 			}
 			wg.Done()
@@ -1131,6 +1174,7 @@ func validateController(f *framework.Framework, pvcPath, appPath, scPath string)
 	if err != nil {
 		return err
 	}
+
 	return deleteResource(rbdExamplePath + "storageclass.yaml")
 }
 
@@ -1172,6 +1216,7 @@ func waitForJobCompletion(c kubernetes.Interface, ns, job string, timeout int) e
 			if isRetryableAPIError(err) {
 				return false, nil
 			}
+
 			return false, fmt.Errorf("failed to get Job: %w", err)
 		}
 
@@ -1183,6 +1228,7 @@ func waitForJobCompletion(c kubernetes.Interface, ns, job string, timeout int) e
 		e2elog.Logf(
 			"Job %s/%s has not completed yet (%d seconds elapsed)",
 			ns, job, int(time.Since(start).Seconds()))
+
 		return false, nil
 	})
 }
@@ -1192,9 +1238,9 @@ func waitForJobCompletion(c kubernetes.Interface, ns, job string, timeout int) e
 type kubectlAction string
 
 const (
-	// kubectlCreate tells retryKubectlInput() to run "create"
+	// kubectlCreate tells retryKubectlInput() to run "create".
 	kubectlCreate = kubectlAction("create")
-	// kubectlDelete tells retryKubectlInput() to run "delete"
+	// kubectlDelete tells retryKubectlInput() to run "delete".
 	kubectlDelete = kubectlAction("delete")
 )
 
@@ -1207,46 +1253,102 @@ func (ka kubectlAction) String() string {
 // retryKubectlInput takes a namespace and action telling kubectl what to do,
 // it then feeds data through stdin to the process. This function retries until
 // no error occurred, or the timeout passed.
-func retryKubectlInput(namespace string, action kubectlAction, data string, t int) error {
+func retryKubectlInput(namespace string, action kubectlAction, data string, t int, args ...string) error {
 	timeout := time.Duration(t) * time.Minute
-	e2elog.Logf("waiting for kubectl (%s) to finish", action)
+	e2elog.Logf("waiting for kubectl (%s -f %q args %s) to finish", action, args)
 	start := time.Now()
+
 	return wait.PollImmediate(poll, timeout, func() (bool, error) {
-		_, err := framework.RunKubectlInput(namespace, data, string(action), "-f", "-")
+		cmd := []string{}
+		if len(args) != 0 {
+			cmd = append(cmd, strings.Join(args, ""))
+		}
+		cmd = append(cmd, []string{string(action), "-f", "-"}...)
+
+		_, err := framework.RunKubectlInput(namespace, data, cmd...)
 		if err != nil {
 			if isRetryableAPIError(err) {
 				return false, nil
 			}
+			if isAlreadyExistsCLIError(err) {
+				return true, nil
+			}
 			e2elog.Logf(
-				"will run kubectl (%s) again (%d seconds elapsed)",
+				"will run kubectl (%s) args (%s) again (%d seconds elapsed)",
 				action,
+				args,
 				int(time.Since(start).Seconds()))
+
 			return false, fmt.Errorf("failed to run kubectl: %w", err)
 		}
+
 		return true, nil
 	})
 }
 
 // retryKubectlFile takes a namespace and action telling kubectl what to do
-// with the passed filename. This function retries until no error occurred, or
-// the timeout passed.
-func retryKubectlFile(namespace string, action kubectlAction, filename string, t int) error {
+// with the passed filename and arguments. This function retries until no error
+// occurred, or the timeout passed.
+func retryKubectlFile(namespace string, action kubectlAction, filename string, t int, args ...string) error {
 	timeout := time.Duration(t) * time.Minute
-	e2elog.Logf("waiting for kubectl (%s -f %q) to finish", action, filename)
+	e2elog.Logf("waiting for kubectl (%s -f %q args %s) to finish", action, filename, args)
 	start := time.Now()
+
 	return wait.PollImmediate(poll, timeout, func() (bool, error) {
-		_, err := framework.RunKubectl(namespace, string(action), "-f", filename)
+		cmd := []string{}
+		if len(args) != 0 {
+			cmd = append(cmd, strings.Join(args, ""))
+		}
+		cmd = append(cmd, []string{string(action), "-f", filename}...)
+
+		_, err := framework.RunKubectl(namespace, cmd...)
 		if err != nil {
 			if isRetryableAPIError(err) {
 				return false, nil
 			}
+			if isAlreadyExistsCLIError(err) {
+				return true, nil
+			}
 			e2elog.Logf(
-				"will run kubectl (%s -f %q) again (%d seconds elapsed)",
+				"will run kubectl (%s -f %q args %s) again (%d seconds elapsed)",
 				action,
 				filename,
+				args,
 				int(time.Since(start).Seconds()))
+
 			return false, fmt.Errorf("failed to run kubectl: %w", err)
 		}
+
+		return true, nil
+	})
+}
+
+// retryKubectlArgs takes a namespace and action telling kubectl what to do
+// with the passed arguments. This function retries until no error occurred, or
+// the timeout passed.
+func retryKubectlArgs(namespace string, action kubectlAction, t int, args ...string) error {
+	timeout := time.Duration(t) * time.Minute
+	args = append([]string{string(action)}, args...)
+	e2elog.Logf("waiting for kubectl (%s args) to finish", args)
+	start := time.Now()
+
+	return wait.PollImmediate(poll, timeout, func() (bool, error) {
+		_, err := framework.RunKubectl(namespace, args...)
+		if err != nil {
+			if isRetryableAPIError(err) {
+				return false, nil
+			}
+			if isAlreadyExistsCLIError(err) {
+				return true, nil
+			}
+			e2elog.Logf(
+				"will run kubectl (%s) again (%d seconds elapsed)",
+				args,
+				int(time.Since(start).Seconds()))
+
+			return false, fmt.Errorf("failed to run kubectl: %w", err)
+		}
+
 		return true, nil
 	})
 }

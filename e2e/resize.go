@@ -19,9 +19,10 @@ import (
 
 func expandPVCSize(c kubernetes.Interface, pvc *v1.PersistentVolumeClaim, size string, t int) error {
 	pvcName := pvc.Name
+	pvcNamespace := pvc.Namespace
 
 	updatedPVC, err := c.CoreV1().
-		PersistentVolumeClaims(pvc.Namespace).
+		PersistentVolumeClaims(pvcNamespace).
 		Get(context.TODO(), pvcName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("error fetching pvc %q with %w", pvcName, err)
@@ -36,16 +37,18 @@ func expandPVCSize(c kubernetes.Interface, pvc *v1.PersistentVolumeClaim, size s
 
 	start := time.Now()
 	e2elog.Logf("Waiting up to %v to be in Resized state", pvc)
+
 	return wait.PollImmediate(poll, timeout, func() (bool, error) {
-		e2elog.Logf("waiting for PVC %s (%d seconds elapsed)", updatedPVC.Name, int(time.Since(start).Seconds()))
+		e2elog.Logf("waiting for PVC %s (%d seconds elapsed)", pvcName, int(time.Since(start).Seconds()))
 		updatedPVC, err = c.CoreV1().
-			PersistentVolumeClaims(updatedPVC.Namespace).
+			PersistentVolumeClaims(pvcNamespace).
 			Get(context.TODO(), pvcName, metav1.GetOptions{})
 		if err != nil {
-			e2elog.Logf("Error getting pvc in namespace: '%s': %v", updatedPVC.Namespace, err)
+			e2elog.Logf("Error getting pvc in namespace: '%s': %v", pvcNamespace, err)
 			if isRetryableAPIError(err) {
 				return false, nil
 			}
+
 			return false, fmt.Errorf("failed to get pvc: %w", err)
 		}
 		pvcConditions := updatedPVC.Status.Conditions
@@ -62,8 +65,10 @@ func expandPVCSize(c kubernetes.Interface, pvc *v1.PersistentVolumeClaim, size s
 				"current size in status %v,expected size %v",
 				updatedPVC.Status.Capacity[v1.ResourceStorage],
 				resource.MustParse(size))
+
 			return false, nil
 		}
+
 		return true, nil
 	})
 }
@@ -143,16 +148,19 @@ func resizePVCAndValidateSize(pvcPath, appPath string, f *framework.Framework) e
 		}
 	}
 	err = deletePVCAndApp("", f, resizePvc, app)
+
 	return err
 }
 
 func checkDirSize(app *v1.Pod, f *framework.Framework, opt *metav1.ListOptions, size string) error {
 	cmd := getDirSizeCheckCmd(app.Spec.Containers[0].VolumeMounts[0].MountPath)
+
 	return checkAppMntSize(f, opt, size, cmd, app.Namespace, deployTimeout)
 }
 
 func checkDeviceSize(app *v1.Pod, f *framework.Framework, opt *metav1.ListOptions, size string) error {
 	cmd := getDeviceSizeCheckCmd(app.Spec.Containers[0].VolumeDevices[0].DevicePath)
+
 	return checkAppMntSize(f, opt, size, cmd, app.Namespace, deployTimeout)
 }
 
@@ -176,6 +184,7 @@ func checkAppMntSize(f *framework.Framework, opt *metav1.ListOptions, size, cmd,
 		}
 		if stdErr != "" {
 			e2elog.Logf("failed to execute command in app pod %v", stdErr)
+
 			return false, nil
 		}
 		s := resource.MustParse(strings.TrimSpace(output))
@@ -190,8 +199,10 @@ func checkAppMntSize(f *framework.Framework, opt *metav1.ListOptions, size, cmd,
 		}
 		if actualSize != expectedSize {
 			e2elog.Logf("expected size %s found %s information", size, output)
+
 			return false, nil
 		}
+
 		return true, nil
 	})
 }

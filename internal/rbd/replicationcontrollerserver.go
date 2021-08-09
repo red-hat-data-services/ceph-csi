@@ -19,9 +19,11 @@ package rbd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ceph/ceph-csi/internal/util"
 
@@ -45,9 +47,9 @@ const (
 type imageMirroringState string
 
 const (
-	// If the state is up+unknown means the rbd-mirror daemon is
+	// If the state is unknown means the rbd-mirror daemon is
 	// running and the image is demoted on both the clusters.
-	upAndUnknown imageMirroringState = "up+unknown"
+	unknown imageMirroringState = "unknown"
 
 	// If the state is error means image need resync.
 	errorState imageMirroringState = "error"
@@ -90,12 +92,14 @@ func getForceOption(ctx context.Context, parameters map[string]string) (bool, er
 	val, ok := parameters[forceKey]
 	if !ok {
 		util.WarningLog(ctx, "%s is not set in parameters, setting to default (%v)", forceKey, false)
+
 		return false, nil
 	}
 	force, err := strconv.ParseBool(val)
 	if err != nil {
 		return false, status.Errorf(codes.Internal, err.Error())
 	}
+
 	return force, nil
 }
 
@@ -109,6 +113,7 @@ func getMirroringMode(ctx context.Context, parameters map[string]string) (librbd
 			"%s is not set in parameters, setting to mirroringMode to default (%s)",
 			imageMirroringKey,
 			imageMirrorModeSnapshot)
+
 		return librbd.ImageMirrorModeSnapshot, nil
 	}
 
@@ -119,12 +124,13 @@ func getMirroringMode(ctx context.Context, parameters map[string]string) (librbd
 	default:
 		return mirroringMode, status.Errorf(codes.InvalidArgument, "%s %s not supported", imageMirroringKey, val)
 	}
+
 	return mirroringMode, nil
 }
 
 // getSchedulingDetails gets the mirroring mode and scheduling details from the
 // input GRPC request parameters and validates the scheduling is only supported
-// for mirroring mode.
+// for snapshot mirroring mode.
 func getSchedulingDetails(parameters map[string]string) (admin.Interval, admin.StartTime, error) {
 	admInt := admin.NoInterval
 	adminStartTime := admin.NoStartTime
@@ -134,6 +140,10 @@ func getSchedulingDetails(parameters map[string]string) (admin.Interval, admin.S
 
 	switch imageMirroringMode(val) {
 	case imageMirrorModeSnapshot:
+	// If mirroring mode is not set in parameters, we are defaulting mirroring
+	// mode to snapshot. Discard empty mirroring mode from validation as it is
+	// an optional parameter.
+	case "":
 	default:
 		return admInt, adminStartTime, status.Error(codes.InvalidArgument, "scheduling is only supported for snapshot mode")
 	}
@@ -159,6 +169,7 @@ func getSchedulingDetails(parameters map[string]string) (admin.Interval, admin.S
 			return admInt, admin.NoStartTime, status.Error(codes.InvalidArgument, err.Error())
 		}
 	}
+
 	return admInt, adminStartTime, nil
 }
 
@@ -169,6 +180,7 @@ func validateSchedulingInterval(interval string) (admin.Interval, error) {
 	if re.MatchString(interval) {
 		return admin.Interval(interval), nil
 	}
+
 	return "", errors.New("interval specified without d, h, m suffix")
 }
 
@@ -195,6 +207,7 @@ func (rs *ReplicationServer) EnableVolumeReplication(ctx context.Context,
 
 	if acquired := rs.VolumeLocks.TryAcquire(volumeID); !acquired {
 		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, volumeID)
+
 		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, volumeID)
 	}
 	defer rs.VolumeLocks.Release(volumeID)
@@ -210,6 +223,7 @@ func (rs *ReplicationServer) EnableVolumeReplication(ctx context.Context,
 		default:
 			err = status.Errorf(codes.Internal, err.Error())
 		}
+
 		return nil, err
 	}
 	// extract the mirroring mode
@@ -221,6 +235,7 @@ func (rs *ReplicationServer) EnableVolumeReplication(ctx context.Context,
 	mirroringInfo, err := rbdVol.getImageMirroringInfo()
 	if err != nil {
 		util.ErrorLog(ctx, err.Error())
+
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -228,6 +243,7 @@ func (rs *ReplicationServer) EnableVolumeReplication(ctx context.Context,
 		err = rbdVol.enableImageMirroring(mirroringMode)
 		if err != nil {
 			util.ErrorLog(ctx, err.Error())
+
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
@@ -266,6 +282,7 @@ func (rs *ReplicationServer) DisableVolumeReplication(ctx context.Context,
 
 	if acquired := rs.VolumeLocks.TryAcquire(volumeID); !acquired {
 		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, volumeID)
+
 		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, volumeID)
 	}
 	defer rs.VolumeLocks.Release(volumeID)
@@ -281,6 +298,7 @@ func (rs *ReplicationServer) DisableVolumeReplication(ctx context.Context,
 		default:
 			err = status.Errorf(codes.Internal, err.Error())
 		}
+
 		return nil, err
 	}
 	// extract the force option
@@ -292,6 +310,7 @@ func (rs *ReplicationServer) DisableVolumeReplication(ctx context.Context,
 	mirroringInfo, err := rbdVol.getImageMirroringInfo()
 	if err != nil {
 		util.ErrorLog(ctx, err.Error())
+
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -308,6 +327,7 @@ func (rs *ReplicationServer) DisableVolumeReplication(ctx context.Context,
 		err = rbdVol.disableImageMirroring(force)
 		if err != nil {
 			util.ErrorLog(ctx, err.Error())
+
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 		// the image state can be still disabling once we disable the mirroring
@@ -315,11 +335,13 @@ func (rs *ReplicationServer) DisableVolumeReplication(ctx context.Context,
 		mirroringInfo, err = rbdVol.getImageMirroringInfo()
 		if err != nil {
 			util.ErrorLog(ctx, err.Error())
+
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 		if mirroringInfo.State == librbd.MirrorImageDisabling {
 			return nil, status.Errorf(codes.Aborted, "%s is in disabling state", volumeID)
 		}
+
 		return &replication.DisableVolumeReplicationResponse{}, nil
 	default:
 		// TODO: use string instead of int for returning valid error message
@@ -348,6 +370,7 @@ func (rs *ReplicationServer) PromoteVolume(ctx context.Context,
 
 	if acquired := rs.VolumeLocks.TryAcquire(volumeID); !acquired {
 		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, volumeID)
+
 		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, volumeID)
 	}
 	defer rs.VolumeLocks.Release(volumeID)
@@ -363,12 +386,14 @@ func (rs *ReplicationServer) PromoteVolume(ctx context.Context,
 		default:
 			err = status.Errorf(codes.Internal, err.Error())
 		}
+
 		return nil, err
 	}
 
 	mirroringInfo, err := rbdVol.getImageMirroringInfo()
 	if err != nil {
 		util.ErrorLog(ctx, err.Error())
+
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -394,6 +419,7 @@ func (rs *ReplicationServer) PromoteVolume(ctx context.Context,
 			if strings.Contains(err.Error(), "Device or resource busy") {
 				return nil, status.Error(codes.FailedPrecondition, err.Error())
 			}
+
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
@@ -420,6 +446,7 @@ func (rs *ReplicationServer) DemoteVolume(ctx context.Context,
 
 	if acquired := rs.VolumeLocks.TryAcquire(volumeID); !acquired {
 		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, volumeID)
+
 		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, volumeID)
 	}
 	defer rs.VolumeLocks.Release(volumeID)
@@ -435,11 +462,13 @@ func (rs *ReplicationServer) DemoteVolume(ctx context.Context,
 		default:
 			err = status.Errorf(codes.Internal, err.Error())
 		}
+
 		return nil, err
 	}
 	mirroringInfo, err := rbdVol.getImageMirroringInfo()
 	if err != nil {
 		util.ErrorLog(ctx, err.Error())
+
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -456,10 +485,35 @@ func (rs *ReplicationServer) DemoteVolume(ctx context.Context,
 		err = rbdVol.demoteImage()
 		if err != nil {
 			util.ErrorLog(ctx, err.Error())
+
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
+
 	return &replication.DemoteVolumeResponse{}, nil
+}
+
+// checkRemoteSiteStatus checks the state of the remote cluster.
+// It returns true if the state of the remote cluster is up and unknown.
+func checkRemoteSiteStatus(ctx context.Context, mirrorStatus *librbd.GlobalMirrorImageStatus) bool {
+	ready := true
+	for _, s := range mirrorStatus.SiteStatuses {
+		if s.MirrorUUID != "" {
+			if imageMirroringState(s.State.String()) != unknown && !s.Up {
+				util.UsefulLog(
+					ctx,
+					"peer site mirrorUUID=%s, mirroring state=%s, description=%s and lastUpdate=%s",
+					s.MirrorUUID,
+					s.State.String(),
+					s.Description,
+					s.LastUpdate)
+
+				ready = false
+			}
+		}
+	}
+
+	return ready
 }
 
 // ResyncVolume extracts the RBD volume information from the volumeID, If the
@@ -481,6 +535,7 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 
 	if acquired := rs.VolumeLocks.TryAcquire(volumeID); !acquired {
 		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, volumeID)
+
 		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, volumeID)
 	}
 	defer rs.VolumeLocks.Release(volumeID)
@@ -495,6 +550,7 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 		default:
 			err = status.Errorf(codes.Internal, err.Error())
 		}
+
 		return nil, err
 	}
 
@@ -503,6 +559,7 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 		// in case of Resync the image will get deleted and gets recreated and
 		// it takes time for this operation.
 		util.ErrorLog(ctx, err.Error())
+
 		return nil, status.Error(codes.Aborted, err.Error())
 	}
 
@@ -523,13 +580,22 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 			resp := &replication.ResyncVolumeResponse{
 				Ready: false,
 			}
+
 			return resp, nil
 		}
 		util.ErrorLog(ctx, err.Error())
+
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	ready := false
-	state := imageMirroringState(mirrorStatus.State)
+
+	localStatus, err := mirrorStatus.LocalStatus()
+	if err != nil {
+		util.ErrorLog(ctx, err.Error())
+
+		return nil, fmt.Errorf("failed to get local status: %w", err)
+	}
+	state := imageMirroringState(localStatus.State.String())
 	//  To recover from split brain (up+error) state the image need to be
 	//  demoted and requested for resync on site-a and then the image on site-b
 	//  should be demoted. The volume should be marked to ready=true when the
@@ -540,39 +606,32 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 	// If the image state on both the sites are up+unknown consider that
 	// complete data is synced as the last snapshot
 	// gets exchanged between the clusters.
-	if state == upAndUnknown {
-		ready = true
-		for _, s := range mirrorStatus.PeerSites {
-			if imageMirroringState(s.State) != upAndUnknown {
-				util.UsefulLog(
-					ctx,
-					"peer site name=%s, mirroring state=%s, description=%s and lastUpdate=%s",
-					s.SiteName,
-					s.State,
-					s.Description,
-					s.LastUpdate)
-				ready = false
-			}
-		}
+	if state == unknown && localStatus.Up {
+		ready = checkRemoteSiteStatus(ctx, mirrorStatus)
 	}
 
 	// resync only if the image is in error state
-	if strings.Contains(mirrorStatus.State, string(errorState)) {
+	if strings.Contains(localStatus.State.String(), string(errorState)) {
 		err = rbdVol.resyncImage()
 		if err != nil {
 			util.ErrorLog(ctx, err.Error())
+
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
 
+	// convert the last update time to UTC
+	lastUpdateTime := time.Unix(localStatus.LastUpdate, 0).UTC()
 	util.UsefulLog(
 		ctx,
 		"image mirroring state=%s, description=%s and lastUpdate=%s",
-		mirrorStatus.State,
-		mirrorStatus.Description,
-		mirrorStatus.LastUpdate)
+		localStatus.State.String(),
+		localStatus.Description,
+		lastUpdateTime)
+
 	resp := &replication.ResyncVolumeResponse{
 		Ready: ready,
 	}
+
 	return resp, nil
 }

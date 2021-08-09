@@ -69,6 +69,7 @@ func TestValidateSchedulingInterval(t *testing.T) {
 			got, err := validateSchedulingInterval(tt.interval)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateSchedulingInterval() error = %v, wantErr %v", err, tt.wantErr)
+
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
@@ -137,6 +138,23 @@ func TestGetSchedulingDetails(t *testing.T) {
 			admin.NoStartTime,
 			false,
 		},
+		{
+			"when no parameters and scheduling details are specified",
+			map[string]string{},
+			admin.NoInterval,
+			admin.NoStartTime,
+			false,
+		},
+		{
+			"when no mirroring mode is specified",
+			map[string]string{
+				schedulingIntervalKey:  "1h",
+				schedulingStartTimeKey: "14:00:00-05:00",
+			},
+			admin.Interval("1h"),
+			admin.StartTime("14:00:00-05:00"),
+			false,
+		},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -145,6 +163,7 @@ func TestGetSchedulingDetails(t *testing.T) {
 			interval, startTime, err := getSchedulingDetails(tt.parameters)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("getSchedulingDetails() error = %v, wantErr %v", err, tt.wantErr)
+
 				return
 			}
 			if !reflect.DeepEqual(interval, tt.wantInterval) {

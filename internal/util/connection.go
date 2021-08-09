@@ -81,6 +81,7 @@ func (cc *ClusterConnection) Copy() *ClusterConnection {
 	c := ClusterConnection{}
 	c.discardOnZeroedWriteSameDisabled = cc.discardOnZeroedWriteSameDisabled
 	c.conn = connPool.Copy(cc.conn)
+	c.Creds = cc.Creds
 
 	return &c
 }
@@ -98,6 +99,7 @@ func (cc *ClusterConnection) GetIoctx(pool string) (*rados.IOContext, error) {
 		} else {
 			err = fmt.Errorf("failed to open IOContext for pool %s: %w", pool, err)
 		}
+
 		return nil, err
 	}
 
@@ -137,5 +139,6 @@ func (cc *ClusterConnection) DisableDiscardOnZeroedWriteSame() error {
 	}
 
 	cc.discardOnZeroedWriteSameDisabled = true
+
 	return nil
 }

@@ -125,12 +125,15 @@ func TestStdVaultToCSIConfig(t *testing.T) {
 	vaultConfigMap := `{
 		"KMS_PROVIDER":"vaulttokens",
 		"VAULT_ADDR":"https://vault.example.com",
+		"VAULT_BACKEND":"kv-v2",
 		"VAULT_BACKEND_PATH":"/secret",
+		"VAULT_DESTROY_KEYS":"true",
 		"VAULT_CACERT":"",
 		"VAULT_TLS_SERVER_NAME":"vault.example.com",
 		"VAULT_CLIENT_CERT":"",
 		"VAULT_CLIENT_KEY":"",
-		"VAULT_NAMESPACE":"a-department",
+		"VAULT_AUTH_NAMESPACE":"devops",
+		"VAULT_NAMESPACE":"devops/homepage",
 		"VAULT_SKIP_VERIFY":"true"
 	}`
 
@@ -138,6 +141,7 @@ func TestStdVaultToCSIConfig(t *testing.T) {
 	err := json.Unmarshal([]byte(vaultConfigMap), sv)
 	if err != nil {
 		t.Errorf("unexpected error: %s", err)
+
 		return
 	}
 
@@ -149,15 +153,21 @@ func TestStdVaultToCSIConfig(t *testing.T) {
 		t.Errorf("unexpected value for EncryptionKMSType: %s", v.EncryptionKMSType)
 	case v.VaultAddress != "https://vault.example.com":
 		t.Errorf("unexpected value for VaultAddress: %s", v.VaultAddress)
+	case v.VaultBackend != "kv-v2":
+		t.Errorf("unexpected value for VaultBackend: %s", v.VaultBackend)
 	case v.VaultBackendPath != "/secret":
 		t.Errorf("unexpected value for VaultBackendPath: %s", v.VaultBackendPath)
+	case v.VaultDestroyKeys != vaultDefaultDestroyKeys:
+		t.Errorf("unexpected value for VaultDestroyKeys: %s", v.VaultDestroyKeys)
 	case v.VaultCAFromSecret != "":
 		t.Errorf("unexpected value for VaultCAFromSecret: %s", v.VaultCAFromSecret)
 	case v.VaultClientCertFromSecret != "":
 		t.Errorf("unexpected value for VaultClientCertFromSecret: %s", v.VaultClientCertFromSecret)
 	case v.VaultClientCertKeyFromSecret != "":
 		t.Errorf("unexpected value for VaultClientCertKeyFromSecret: %s", v.VaultClientCertKeyFromSecret)
-	case v.VaultNamespace != "a-department":
+	case v.VaultAuthNamespace != "devops":
+		t.Errorf("unexpected value for VaultAuthNamespace: %s", v.VaultAuthNamespace)
+	case v.VaultNamespace != "devops/homepage":
 		t.Errorf("unexpected value for VaultNamespace: %s", v.VaultNamespace)
 	case v.VaultTLSServerName != "vault.example.com":
 		t.Errorf("unexpected value for VaultTLSServerName: %s", v.VaultTLSServerName)
@@ -171,23 +181,29 @@ func TestTransformConfig(t *testing.T) {
 	cm := make(map[string]interface{})
 	cm["KMS_PROVIDER"] = "vaulttokens"
 	cm["VAULT_ADDR"] = "https://vault.example.com"
+	cm["VAULT_BACKEND"] = "kv-v2"
 	cm["VAULT_BACKEND_PATH"] = "/secret"
+	cm["VAULT_DESTROY_KEYS"] = "true"
 	cm["VAULT_CACERT"] = ""
 	cm["VAULT_TLS_SERVER_NAME"] = "vault.example.com"
 	cm["VAULT_CLIENT_CERT"] = ""
 	cm["VAULT_CLIENT_KEY"] = ""
-	cm["VAULT_NAMESPACE"] = "a-department"
+	cm["VAULT_AUTH_NAMESPACE"] = "devops"
+	cm["VAULT_NAMESPACE"] = "devops/homepage"
 	cm["VAULT_SKIP_VERIFY"] = "true" // inverse of "vaultCAVerify"
 
 	config, err := transformConfig(cm)
 	require.NoError(t, err)
 	assert.Equal(t, config["encryptionKMSType"], cm["KMS_PROVIDER"])
 	assert.Equal(t, config["vaultAddress"], cm["VAULT_ADDR"])
+	assert.Equal(t, config["vaultBackend"], cm["VAULT_BACKEND"])
 	assert.Equal(t, config["vaultBackendPath"], cm["VAULT_BACKEND_PATH"])
+	assert.Equal(t, config["vaultDestroyKeys"], cm["VAULT_DESTROY_KEYS"])
 	assert.Equal(t, config["vaultCAFromSecret"], cm["VAULT_CACERT"])
 	assert.Equal(t, config["vaultTLSServerName"], cm["VAULT_TLS_SERVER_NAME"])
 	assert.Equal(t, config["vaultClientCertFromSecret"], cm["VAULT_CLIENT_CERT"])
 	assert.Equal(t, config["vaultClientCertKeyFromSecret"], cm["VAULT_CLIENT_KEY"])
+	assert.Equal(t, config["vaultAuthNamespace"], cm["VAULT_AUTH_NAMESPACE"])
 	assert.Equal(t, config["vaultNamespace"], cm["VAULT_NAMESPACE"])
 	assert.Equal(t, config["vaultCAVerify"], "false")
 }

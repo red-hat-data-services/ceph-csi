@@ -3,6 +3,8 @@ kind: DaemonSet
 apiVersion: apps/v1
 metadata:
   name: csi-rbdplugin
+  # replace with non-default namespace name
+  namespace: default
 spec:
   selector:
     matchLabels:
@@ -73,10 +75,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
-            # - name: POD_NAMESPACE
-            #   valueFrom:
-            #     fieldRef:
-            #       fieldPath: spec.namespace
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             # - name: KMS_CONFIGMAP_NAME
             #   value: encryptionConfig
             - name: CSI_ENDPOINT
@@ -91,6 +93,9 @@ spec:
               name: host-sys
             - mountPath: /run/mount
               name: host-mount
+            - mountPath: /etc/selinux
+              name: etc-selinux
+              readOnly: true
             - mountPath: /lib/modules
               name: lib-modules
               readOnly: true
@@ -151,6 +156,9 @@ spec:
         - name: host-sys
           hostPath:
             path: /sys
+        - name: etc-selinux
+          hostPath:
+            path: /etc/selinux
         - name: host-mount
           hostPath:
             path: /run/mount
@@ -173,6 +181,8 @@ apiVersion: v1
 kind: Service
 metadata:
   name: csi-metrics-rbdplugin
+  # replace with non-default namespace name
+  namespace: default
   labels:
     app: csi-metrics
 spec:

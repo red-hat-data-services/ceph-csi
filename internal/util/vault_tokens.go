@@ -57,11 +57,14 @@ const (
 type standardVault struct {
 	KmsPROVIDER        string `json:"KMS_PROVIDER"`
 	VaultADDR          string `json:"VAULT_ADDR"`
+	VaultBackend       string `json:"VAULT_BACKEND"`
 	VaultBackendPath   string `json:"VAULT_BACKEND_PATH"`
+	VaultDestroyKeys   string `json:"VAULT_DESTROY_KEYS"`
 	VaultCACert        string `json:"VAULT_CACERT"`
 	VaultTLSServerName string `json:"VAULT_TLS_SERVER_NAME"`
 	VaultClientCert    string `json:"VAULT_CLIENT_CERT"`
 	VaultClientKey     string `json:"VAULT_CLIENT_KEY"`
+	VaultAuthNamespace string `json:"VAULT_AUTH_NAMESPACE"`
 	VaultNamespace     string `json:"VAULT_NAMESPACE"`
 	VaultSkipVerify    string `json:"VAULT_SKIP_VERIFY"`
 }
@@ -69,11 +72,14 @@ type standardVault struct {
 type vaultTokenConf struct {
 	EncryptionKMSType            string `json:"encryptionKMSType"`
 	VaultAddress                 string `json:"vaultAddress"`
+	VaultBackend                 string `json:"vaultBackend"`
 	VaultBackendPath             string `json:"vaultBackendPath"`
+	VaultDestroyKeys             string `json:"vaultDestroyKeys"`
 	VaultCAFromSecret            string `json:"vaultCAFromSecret"`
 	VaultTLSServerName           string `json:"vaultTLSServerName"`
 	VaultClientCertFromSecret    string `json:"vaultClientCertFromSecret"`
 	VaultClientCertKeyFromSecret string `json:"vaultClientCertKeyFromSecret"`
+	VaultAuthNamespace           string `json:"vaultAuthNamespace"`
 	VaultNamespace               string `json:"vaultNamespace"`
 	VaultCAVerify                string `json:"vaultCAVerify"`
 }
@@ -81,16 +87,19 @@ type vaultTokenConf struct {
 func (v *vaultTokenConf) convertStdVaultToCSIConfig(s *standardVault) {
 	v.EncryptionKMSType = s.KmsPROVIDER
 	v.VaultAddress = s.VaultADDR
+	v.VaultBackend = s.VaultBackend
 	v.VaultBackendPath = s.VaultBackendPath
+	v.VaultDestroyKeys = s.VaultDestroyKeys
 	v.VaultCAFromSecret = s.VaultCACert
 	v.VaultClientCertFromSecret = s.VaultClientCert
 	v.VaultClientCertKeyFromSecret = s.VaultClientKey
+	v.VaultAuthNamespace = s.VaultAuthNamespace
 	v.VaultNamespace = s.VaultNamespace
 	v.VaultTLSServerName = s.VaultTLSServerName
 
 	// by default the CA should get verified, only when VaultSkipVerify is
 	// set, verification should be disabled
-	v.VaultCAVerify = "true"
+	v.VaultCAVerify = vaultDefaultCAVerify
 	verify, err := strconv.ParseBool(s.VaultSkipVerify)
 	if err == nil {
 		v.VaultCAVerify = strconv.FormatBool(!verify)
@@ -134,6 +143,7 @@ func transformConfig(svMap map[string]interface{}) (map[string]interface{}, erro
 	if err != nil {
 		return nil, fmt.Errorf("failed to Unmarshal the CSI vault configuration: %w", err)
 	}
+
 	return jsonMap, nil
 }
 
@@ -146,6 +156,7 @@ Example JSON structure in the KMS config is,
     "vault-with-tokens": {
         "encryptionKMSType": "vaulttokens",
         "vaultAddress": "http://vault.default.svc.cluster.local:8200",
+        "vaultBackend": "kv-v2",
         "vaultBackendPath": "secret/",
         "vaultTLSServerName": "vault.default.svc.cluster.local",
         "vaultCAFromSecret": "vault-ca",
@@ -334,7 +345,7 @@ func (kms *VaultTokensKMS) setTokenName(config map[string]interface{}) error {
 // initCertificates updates the kms.vaultConfig with the options from config
 // it calls the kubernetes secrets and get the required data.
 
-// nolint:gocyclo // iterating through many config options, not complex at all.
+// nolint:gocyclo,cyclop // iterating through many config options, not complex at all.
 func (vtc *vaultTenantConnection) initCertificates(config map[string]interface{}) error {
 	vaultConfig := make(map[string]interface{})
 
@@ -471,7 +482,7 @@ func (vtc *vaultTenantConnection) StoreDEK(key, value string) error {
 
 // RemoveDEK deletes passphrase from Vault.
 func (vtc *vaultTenantConnection) RemoveDEK(key string) error {
-	err := vtc.secrets.DeleteSecret(key, vtc.keyContext)
+	err := vtc.secrets.DeleteSecret(key, vtc.getDeleteKeyContext())
 	if err != nil {
 		return fmt.Errorf("delete passphrase at %s request to vault failed: %w", key, err)
 	}
@@ -514,7 +525,11 @@ func (vtc *vaultTenantConnection) getCertificate(tenant, secretName, key string)
 func isTenantConfigOption(opt string) bool {
 	switch opt {
 	case "vaultAddress":
+	case "vaultBackend":
 	case "vaultBackendPath":
+	case "vaultAuthNamespace":
+	case "vaultNamespace":
+	case "vaultDestroyKeys":
 	case "vaultTLSServerName":
 	case "vaultCAFromSecret":
 	case "vaultCAVerify":
@@ -577,5 +592,6 @@ func fetchTenantConfig(config map[string]interface{}, tenant string) (map[string
 	if !ok {
 		return nil, false
 	}
+
 	return tenantConfig, true
 }

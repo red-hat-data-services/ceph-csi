@@ -51,6 +51,8 @@ output:
 
 # all available settings of specific linters
 linters-settings:
+  cyclop:
+    max-complexity: 20
   errcheck:
     # report about not checking of errors in type assetions:
     #  `a := b.(MyStruct)`;
@@ -166,5 +168,14 @@ linters:
     - wsl
     - funlen
     - testpackage
+    - exhaustivestruct
     # TODO: enable goerr113, see: https://github.com/ceph/ceph-csi/issues/1227
     - goerr113
+    - forbidigo
+    # TODO: enable gomoddirectives
+    - gomoddirectives
+    # TODO: enable gci
+    - gci
+    # TODO: enable wrapcheck linter
+    # See: https://github.com/ceph/ceph-csi/pull/2268
+    - wrapcheck

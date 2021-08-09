@@ -184,10 +184,11 @@ func validateRBDStaticPV(f *framework.Framework, appPath string, isBlock, checkI
 
 	cmd = fmt.Sprintf("rbd rm %s %s", rbdImageName, rbdOptions(defaultRBDPool))
 	_, _, err = execCommandInToolBoxPod(f, cmd, rookNamespace)
+
 	return err
 }
 
-// nolint:gocyclo // reduce complexity
+// nolint:gocyclo,cyclop // reduce complexity
 func validateCephFsStaticPV(f *framework.Framework, appPath, scPath string) error {
 	opt := make(map[string]string)
 	var (
