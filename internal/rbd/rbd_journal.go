@@ -522,6 +522,8 @@ func undoVolReservation(ctx context.Context, rbdVol *rbdVolume, cr *util.Credent
 // complete omap mapping between imageName and volumeID.
 
 // RegenerateJournal performs below operations
+// Extract parameters journalPool, pool from volumeAttributes
+// Extract optional parameters volumeNamePrefix, kmsID, owner from volumeAttributes
 // Extract information from volumeID
 // Get pool ID from pool name
 // Extract uuid from volumeID
@@ -530,23 +532,32 @@ func undoVolReservation(ctx context.Context, rbdVol *rbdVolume, cr *util.Credent
 // The volume handler won't remain same as its contains poolID,clusterID etc
 // which are not same across clusters.
 func RegenerateJournal(
-	imageName, volumeID, pool, journalPool, requestName string,
+	volumeAttributes map[string]string,
+	volumeID, requestName string,
 	cr *util.Credentials) (string, error) {
 	ctx := context.Background()
 	var (
 		options map[string]string
 		vi      util.CSIIdentifier
 		rbdVol  *rbdVolume
+		kmsID   string
+		err     error
+		ok      bool
 	)
 
 	options = make(map[string]string)
 	rbdVol = &rbdVolume{}
 	rbdVol.VolID = volumeID
 
-	err := vi.DecomposeCSIID(rbdVol.VolID)
+	err = vi.DecomposeCSIID(rbdVol.VolID)
 	if err != nil {
 		return "", fmt.Errorf("%w: error decoding volume ID (%s) (%s)",
 			ErrInvalidVolID, err, rbdVol.VolID)
+	}
+
+	kmsID, err = rbdVol.ParseEncryptionOpts(ctx, volumeAttributes)
+	if err != nil {
+		return "", err
 	}
 
 	// TODO check clusterID mapping exists
@@ -560,16 +571,18 @@ func RegenerateJournal(
 		return "", err
 	}
 
-	rbdVol.Pool = pool
+	if rbdVol.Pool, ok = volumeAttributes["pool"]; !ok {
+		return "", errors.New("required 'pool' parameter missing in volume attributes")
+	}
 	err = rbdVol.Connect(cr)
 	if err != nil {
 		return "", err
 	}
-	rbdVol.JournalPool = journalPool
+	rbdVol.JournalPool = volumeAttributes["journalPool"]
 	if rbdVol.JournalPool == "" {
 		rbdVol.JournalPool = rbdVol.Pool
 	}
-	volJournal = journal.NewCSIVolumeJournal("default")
+	volJournal = journal.NewCSIVolumeJournal(CSIInstanceID)
 	j, err := volJournal.Connect(rbdVol.Monitors, rbdVol.RadosNamespace, cr)
 	if err != nil {
 		return "", err
@@ -582,9 +595,8 @@ func RegenerateJournal(
 	}
 
 	rbdVol.RequestName = requestName
-	// TODO add Nameprefix also
+	rbdVol.NamePrefix = volumeAttributes["volumeNamePrefix"]
 
-	kmsID := ""
 	imageData, err := j.CheckReservation(
 		ctx, rbdVol.JournalPool, rbdVol.RequestName, rbdVol.NamePrefix, "", kmsID)
 	if err != nil {

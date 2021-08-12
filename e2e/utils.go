@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1071,13 +1072,17 @@ func validatePVCSnapshot(
 // Mount the PVC to application (NodeStage/NodePublish should work)
 // Resize the PVC
 // Delete the Application and PVC.
-func validateController(f *framework.Framework, pvcPath, appPath, scPath string) error {
+func validateController(
+	f *framework.Framework,
+	pvcPath, appPath, scPath string,
+	scOptions, scParams map[string]string) error {
 	size := "1Gi"
 	poolName := defaultRBDPool
 	expandSize := "10Gi"
 	var err error
 	// create storageclass with retain
-	err = createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, nil, retainPolicy)
+	err = createRBDStorageClass(f.ClientSet, f, defaultSCName, scOptions, scParams,
+		retainPolicy)
 	if err != nil {
 		return fmt.Errorf("failed to create storageclass: %w", err)
 	}
@@ -1087,10 +1092,7 @@ func validateController(f *framework.Framework, pvcPath, appPath, scPath string)
 	if err != nil {
 		return fmt.Errorf("failed to load PVC: %w", err)
 	}
-	resizePvc, err := loadPVC(pvcPath)
-	if err != nil {
-		return fmt.Errorf("failed to load PVC: %w", err)
-	}
+	resizePvc := pvc.DeepCopy()
 	resizePvc.Namespace = f.UniqueName
 
 	pvc.Spec.Resources.Requests[v1.ResourceStorage] = resource.MustParse(size)
@@ -1109,16 +1111,13 @@ func validateController(f *framework.Framework, pvcPath, appPath, scPath string)
 	if err != nil {
 		return fmt.Errorf("failed to delete storageclass: %w", err)
 	}
-	err = createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, nil, deletePolicy)
+	err = createRBDStorageClass(f.ClientSet, f, defaultSCName, scOptions, scParams,
+		deletePolicy)
 	if err != nil {
 		return fmt.Errorf("failed to create storageclass: %w", err)
 	}
 	// delete omap data
-	err = deletePVCImageJournalInPool(f, pvc, poolName)
-	if err != nil {
-		return err
-	}
-	err = deletePVCCSIJournalInPool(f, pvc, poolName)
+	err = deleteJournalInfoInPool(f, pvc, poolName)
 	if err != nil {
 		return err
 	}
@@ -1151,22 +1150,29 @@ func validateController(f *framework.Framework, pvcPath, appPath, scPath string)
 	if err != nil {
 		return err
 	}
-	// resize PVC
-	err = expandPVCSize(f.ClientSet, resizePvc, expandSize, deployTimeout)
-	if err != nil {
-		return err
-	}
-	if *pvc.Spec.VolumeMode == v1.PersistentVolumeFilesystem {
-		err = checkDirSize(app, f, &opt, expandSize)
+	if scParams["encrypted"] == strconv.FormatBool(true) {
+		// check encryption
+		err = isEncryptedPVC(f, resizePvc, app)
 		if err != nil {
 			return err
 		}
-	}
-
-	if *pvc.Spec.VolumeMode == v1.PersistentVolumeBlock {
-		err = checkDeviceSize(app, f, &opt, expandSize)
+	} else {
+		// resize PVC
+		err = expandPVCSize(f.ClientSet, resizePvc, expandSize, deployTimeout)
 		if err != nil {
 			return err
+		}
+		switch *pvc.Spec.VolumeMode {
+		case v1.PersistentVolumeFilesystem:
+			err = checkDirSize(app, f, &opt, expandSize)
+			if err != nil {
+				return err
+			}
+		case v1.PersistentVolumeBlock:
+			err = checkDeviceSize(app, f, &opt, expandSize)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	// delete pvc and storageclass
