@@ -418,7 +418,7 @@ func (cs *ControllerServer) repairExistingVolume(ctx context.Context, req *csi.C
 					"restoring thick-provisioned volume %q has been interrupted, please retry", rbdVol)
 			}
 		}
-		// restore from snapshot imploes rbdSnap != nil
+		// restore from snapshot implies rbdSnap != nil
 		// check if image depth is reached limit and requires flatten
 		err := checkFlatten(ctx, rbdVol, cr)
 		if err != nil {
@@ -533,7 +533,7 @@ func flattenTemporaryClonedImages(ctx context.Context, rbdVol *rbdVolume, cr *ut
 	return nil
 }
 
-// checkFlatten ensures that that the image chain depth is not reached
+// checkFlatten ensures that the image chain depth is not reached
 // hardlimit or softlimit. if the softlimit is reached it adds a task and
 // return success,the hardlimit is reached it starts a task to flatten the
 // image and return Aborted.
@@ -823,13 +823,58 @@ func (cs *ControllerServer) DeleteVolume(
 	}
 
 	// lock out parallel create requests against the same volume name as we
-	// cleanup the image and associated omaps for the same
+	// clean up the image and associated omaps for the same
 	if acquired := cs.VolumeLocks.TryAcquire(rbdVol.RequestName); !acquired {
 		util.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, rbdVol.RequestName)
 
 		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, rbdVol.RequestName)
 	}
 	defer cs.VolumeLocks.Release(rbdVol.RequestName)
+
+	return cleanupRBDImage(ctx, rbdVol, cr)
+}
+
+// cleanupRBDImage removes the rbd image and OMAP metadata associated with it.
+func cleanupRBDImage(ctx context.Context,
+	rbdVol *rbdVolume, cr *util.Credentials) (*csi.DeleteVolumeResponse, error) {
+	mirroringInfo, err := rbdVol.getImageMirroringInfo()
+	if err != nil {
+		util.ErrorLog(ctx, err.Error())
+
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	// Cleanup only omap data if the following condition is met
+	// Mirroring is enabled on the image
+	// Local image is secondary
+	// Local image is in up+replaying state
+	if mirroringInfo.State == librbd.MirrorImageEnabled && !mirroringInfo.Primary {
+		// If the image is in a secondary state and its up+replaying means its
+		// an healthy secondary and the image is primary somewhere in the
+		// remote cluster and the local image is getting replayed. Delete the
+		// OMAP data generated as we cannot delete the secondary image. When
+		// the image on the primary cluster gets deleted/mirroring disabled,
+		// the image on all the remote (secondary) clusters will get
+		// auto-deleted. This helps in garbage collecting the OMAP, PVC and PV
+		// objects after failback operation.
+		localStatus, rErr := rbdVol.getLocalState()
+		if rErr != nil {
+			return nil, status.Error(codes.Internal, rErr.Error())
+		}
+		if localStatus.Up && localStatus.State == librbd.MirrorImageStatusStateReplaying {
+			if err = undoVolReservation(ctx, rbdVol, cr); err != nil {
+				util.ErrorLog(ctx, "failed to remove reservation for volume (%s) with backing image (%s) (%s)",
+					rbdVol.RequestName, rbdVol.RbdImageName, err)
+
+				return nil, status.Error(codes.Internal, err.Error())
+			}
+
+			return &csi.DeleteVolumeResponse{}, nil
+		}
+		util.ErrorLog(ctx,
+			"secondary image status is up=%t and state=%s",
+			localStatus.Up,
+			localStatus.State)
+	}
 
 	inUse, err := rbdVol.isInUse()
 	if err != nil {
@@ -1257,7 +1302,7 @@ func (cs *ControllerServer) DeleteSnapshot(
 
 	rbdSnap := &rbdSnapshot{}
 	if err = genSnapFromSnapID(ctx, rbdSnap, snapshotID, cr, req.GetSecrets()); err != nil {
-		// if error is ErrPoolNotFound, the pool is already deleted we dont
+		// if error is ErrPoolNotFound, the pool is already deleted we don't
 		// need to worry about deleting snapshot or omap data, return success
 		if errors.Is(err, util.ErrPoolNotFound) {
 			util.WarningLog(ctx, "failed to get backend snapshot for %s: %v", snapshotID, err)
