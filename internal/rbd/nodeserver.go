@@ -274,6 +274,10 @@ func (ns *NodeServer) NodeStageVolume(
 	volOptions.MapOptions = req.GetVolumeContext()["mapOptions"]
 	volOptions.UnmapOptions = req.GetVolumeContext()["unmapOptions"]
 	volOptions.Mounter = req.GetVolumeContext()["mounter"]
+	volOptions.LogDir = req.GetVolumeContext()["cephLogDir"]
+	if volOptions.LogDir == "" {
+		volOptions.LogDir = defaultLogDir
+	}
 
 	err = volOptions.Connect(cr)
 	if err != nil {
@@ -818,13 +822,17 @@ func (ns *NodeServer) NodeUnstageVolume(
 
 	// Unmapping rbd device
 	imageSpec := imgInfo.String()
-	if err = detachRBDImageOrDeviceSpec(
-		ctx, imageSpec,
-		true,
-		imgInfo.NbdAccess,
-		imgInfo.Encrypted,
-		req.GetVolumeId(),
-		imgInfo.UnmapOptions); err != nil {
+
+	dArgs := detachRBDImageArgs{
+		imageOrDeviceSpec: imageSpec,
+		isImageSpec:       true,
+		isNbd:             imgInfo.NbdAccess,
+		encrypted:         imgInfo.Encrypted,
+		volumeID:          req.GetVolumeId(),
+		unmapOptions:      imgInfo.UnmapOptions,
+		logDir:            imgInfo.LogDir,
+	}
+	if err = detachRBDImageOrDeviceSpec(ctx, dArgs); err != nil {
 		util.ErrorLog(
 			ctx,
 			"error unmapping volume (%s) from staging path (%s): (%v)",

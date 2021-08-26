@@ -50,6 +50,7 @@ const (
 	rbdImageWatcherSteps     = 10
 	rbdDefaultMounter        = "rbd"
 	rbdNbdMounter            = "rbd-nbd"
+	defaultLogDir            = "/var/log/ceph"
 
 	// Output strings returned during invocation of "ceph rbd task add remove <imagespec>" when
 	// command is not supported by ceph manager. Used to check errors and recover when the command
@@ -136,6 +137,7 @@ type rbdVolume struct {
 	ReservedID         string
 	MapOptions         string
 	UnmapOptions       string
+	LogDir             string
 	VolName            string `json:"volName"`
 	MonValueFromSecret string `json:"monValueFromSecret"`
 	VolSize            int64  `json:"volSize"`
@@ -1523,6 +1525,7 @@ type rbdImageMetadataStash struct {
 	NbdAccess      bool   `json:"accessType"`
 	Encrypted      bool   `json:"encrypted"`
 	DevicePath     string `json:"device"` // holds NBD device path for now
+	LogDir         string `json:"logDir"` // holds the client log path
 }
 
 // file name in which image metadata is stashed.
@@ -1553,6 +1556,7 @@ func stashRBDImageMetadata(volOptions *rbdVolume, metaDataPath string) error {
 	imgMeta.NbdAccess = false
 	if volOptions.Mounter == rbdTonbd && hasNBD {
 		imgMeta.NbdAccess = true
+		imgMeta.LogDir = volOptions.LogDir
 	}
 
 	encodedBytes, err := json.Marshal(imgMeta)
@@ -2001,4 +2005,17 @@ func (ri *rbdImage) addSnapshotScheduling(
 	}
 
 	return nil
+}
+
+// getCephClientLogFileName compiles the complete log file path based on inputs.
+func getCephClientLogFileName(id, logDir, prefix string) string {
+	if prefix == "" {
+		prefix = "ceph"
+	}
+
+	if logDir == "" {
+		logDir = defaultLogDir
+	}
+
+	return fmt.Sprintf("%s/%s-%s.log", logDir, prefix, id)
 }

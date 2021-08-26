@@ -48,10 +48,22 @@ const (
 	rbdUnmapCmdNbdMissingMap  = "rbd-nbd: %s is not mapped"
 	rbdMapConnectionTimeout   = "Connection timed out"
 
-	defaultNbdReAttachTimeout = 300
+	defaultNbdReAttachTimeout = 300 /* in seconds */
+	defaultNbdIOTimeout       = 0   /* do not abort the requests */
 
-	useNbdNetlink  = "try-netlink"
+	// The default way of creating nbd devices via rbd-nbd is through the
+	// legacy ioctl interface, to take advantage of netlink features we
+	// should specify `try-netlink` flag explicitly.
+	useNbdNetlink = "try-netlink"
+
+	// `reattach-timeout` of rbd-nbd is to tweak NBD_ATTR_DEAD_CONN_TIMEOUT.
+	// It specifies how long the device should be held waiting for the
+	// userspace process to come back to life.
 	setNbdReattach = "reattach-timeout"
+
+	// `io-timeout` of rbd-nbd is to tweak NBD_ATTR_TIMEOUT. It specifies
+	// how long the IO should wait to get handled before bailing out.
+	setNbdIOTimeout = "io-timeout"
 )
 
 var hasNBD = false
@@ -79,6 +91,16 @@ type nbdDeviceInfo struct {
 	RadosNamespace string `json:"namespace"`
 	Name           string `json:"image"`
 	Device         string `json:"device"`
+}
+
+type detachRBDImageArgs struct {
+	imageOrDeviceSpec string
+	isImageSpec       bool
+	isNbd             bool
+	encrypted         bool
+	volumeID          string
+	unmapOptions      string
+	logDir            string
 }
 
 // rbdGetDeviceList queries rbd about mapped devices and returns a list of rbdDeviceInfo
@@ -239,6 +261,9 @@ func appendDeviceTypeAndOptions(cmdArgs []string, isNbd, isThick bool, userOptio
 		if !strings.Contains(userOptions, setNbdReattach) {
 			cmdArgs = append(cmdArgs, "--options", fmt.Sprintf("%s=%d", setNbdReattach, defaultNbdReAttachTimeout))
 		}
+		if !strings.Contains(userOptions, setNbdIOTimeout) {
+			cmdArgs = append(cmdArgs, "--options", fmt.Sprintf("%s=%d", setNbdIOTimeout, defaultNbdIOTimeout))
+		}
 	}
 	if isThick {
 		// When an image is thick-provisioned, any discard/unmap/trim
@@ -262,6 +287,9 @@ func appendRbdNbdCliOptions(cmdArgs []string, userOptions string) []string {
 	}
 	if !strings.Contains(userOptions, setNbdReattach) {
 		cmdArgs = append(cmdArgs, fmt.Sprintf("--%s=%d", setNbdReattach, defaultNbdReAttachTimeout))
+	}
+	if !strings.Contains(userOptions, setNbdIOTimeout) {
+		cmdArgs = append(cmdArgs, fmt.Sprintf("--%s=%d", setNbdIOTimeout, defaultNbdIOTimeout))
 	}
 	if userOptions != "" {
 		options := strings.Split(userOptions, ",")
@@ -296,6 +324,11 @@ func createPath(ctx context.Context, volOpt *rbdVolume, device string, cr *util.
 		util.WarningLog(ctx, "failed to detect if image %q is thick-provisioned: %v", volOpt, err)
 	}
 
+	if isNbd {
+		mapArgs = append(mapArgs, "--log-file",
+			getCephClientLogFileName(volOpt.VolID, volOpt.LogDir, "rbd-nbd"))
+	}
+
 	cli := rbd
 	if device != "" {
 		// TODO: use rbd cli for attach/detach in the future
@@ -317,14 +350,16 @@ func createPath(ctx context.Context, volOpt *rbdVolume, device string, cr *util.
 		util.WarningLog(ctx, "rbd: map error %v, rbd output: %s", err, stderr)
 		// unmap rbd image if connection timeout
 		if strings.Contains(err.Error(), rbdMapConnectionTimeout) {
-			detErr := detachRBDImageOrDeviceSpec(
-				ctx,
-				imagePath,
-				true,
-				isNbd,
-				volOpt.isEncrypted(),
-				volOpt.VolID,
-				volOpt.UnmapOptions)
+			dArgs := detachRBDImageArgs{
+				imageOrDeviceSpec: imagePath,
+				isImageSpec:       true,
+				isNbd:             isNbd,
+				encrypted:         volOpt.isEncrypted(),
+				volumeID:          volOpt.VolID,
+				unmapOptions:      volOpt.UnmapOptions,
+				logDir:            volOpt.LogDir,
+			}
+			detErr := detachRBDImageOrDeviceSpec(ctx, dArgs)
 			if detErr != nil {
 				util.WarningLog(ctx, "rbd: %s unmap error %v", imagePath, detErr)
 			}
@@ -367,22 +402,29 @@ func detachRBDDevice(ctx context.Context, devicePath, volumeID, unmapOptions str
 		nbdType = true
 	}
 
-	return detachRBDImageOrDeviceSpec(ctx, devicePath, false, nbdType, encrypted, volumeID, unmapOptions)
+	dArgs := detachRBDImageArgs{
+		imageOrDeviceSpec: devicePath,
+		isImageSpec:       false,
+		isNbd:             nbdType,
+		encrypted:         encrypted,
+		volumeID:          volumeID,
+		unmapOptions:      unmapOptions,
+	}
+
+	return detachRBDImageOrDeviceSpec(ctx, dArgs)
 }
 
 // detachRBDImageOrDeviceSpec detaches an rbd imageSpec or devicePath, with additional checking
 // when imageSpec is used to decide if image is already unmapped.
 func detachRBDImageOrDeviceSpec(
 	ctx context.Context,
-	imageOrDeviceSpec string,
-	isImageSpec, isNbd, encrypted bool,
-	volumeID, unmapOptions string) error {
-	if encrypted {
-		mapperFile, mapperPath := util.VolumeMapper(volumeID)
+	dArgs detachRBDImageArgs) error {
+	if dArgs.encrypted {
+		mapperFile, mapperPath := util.VolumeMapper(dArgs.volumeID)
 		mappedDevice, mapper, err := util.DeviceEncryptionStatus(ctx, mapperPath)
 		if err != nil {
 			util.ErrorLog(ctx, "error determining LUKS device on %s, %s: %s",
-				mapperPath, imageOrDeviceSpec, err)
+				mapperPath, dArgs.imageOrDeviceSpec, err)
 
 			return err
 		}
@@ -391,31 +433,38 @@ func detachRBDImageOrDeviceSpec(
 			err = util.CloseEncryptedVolume(ctx, mapperFile)
 			if err != nil {
 				util.ErrorLog(ctx, "error closing LUKS device on %s, %s: %s",
-					mapperPath, imageOrDeviceSpec, err)
+					mapperPath, dArgs.imageOrDeviceSpec, err)
 
 				return err
 			}
-			imageOrDeviceSpec = mappedDevice
+			dArgs.imageOrDeviceSpec = mappedDevice
 		}
 	}
 
-	unmapArgs := []string{"unmap", imageOrDeviceSpec}
-	unmapArgs = appendDeviceTypeAndOptions(unmapArgs, isNbd, false, unmapOptions)
+	unmapArgs := []string{"unmap", dArgs.imageOrDeviceSpec}
+	unmapArgs = appendDeviceTypeAndOptions(unmapArgs, dArgs.isNbd, false, dArgs.unmapOptions)
 
 	_, stderr, err := util.ExecCommand(ctx, rbd, unmapArgs...)
 	if err != nil {
 		// Messages for krbd and nbd differ, hence checking either of them for missing mapping
 		// This is not applicable when a device path is passed in
-		if isImageSpec &&
-			(strings.Contains(stderr, fmt.Sprintf(rbdUnmapCmdkRbdMissingMap, imageOrDeviceSpec)) ||
-				strings.Contains(stderr, fmt.Sprintf(rbdUnmapCmdNbdMissingMap, imageOrDeviceSpec))) {
+		if dArgs.isImageSpec &&
+			(strings.Contains(stderr, fmt.Sprintf(rbdUnmapCmdkRbdMissingMap, dArgs.imageOrDeviceSpec)) ||
+				strings.Contains(stderr, fmt.Sprintf(rbdUnmapCmdNbdMissingMap, dArgs.imageOrDeviceSpec))) {
 			// Devices found not to be mapped are treated as a successful detach
-			util.TraceLog(ctx, "image or device spec (%s) not mapped", imageOrDeviceSpec)
+			util.TraceLog(ctx, "image or device spec (%s) not mapped", dArgs.imageOrDeviceSpec)
 
 			return nil
 		}
 
-		return fmt.Errorf("rbd: unmap for spec (%s) failed (%w): (%s)", imageOrDeviceSpec, err, stderr)
+		return fmt.Errorf("rbd: unmap for spec (%s) failed (%w): (%s)", dArgs.imageOrDeviceSpec, err, stderr)
+	}
+	if dArgs.isNbd && dArgs.logDir != "" {
+		logFile := getCephClientLogFileName(dArgs.volumeID, dArgs.logDir, "rbd-nbd")
+		if err = os.Remove(logFile); err != nil {
+			util.WarningLog(ctx, "failed to remove logfile: %s, error: %v",
+				logFile, err)
+		}
 	}
 
 	return nil
