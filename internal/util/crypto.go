@@ -25,14 +25,14 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/ceph/ceph-csi/internal/kms"
+	"github.com/ceph/ceph-csi/internal/util/log"
 )
 
 const (
 	mapperFilePrefix     = "luks-rbd-"
 	mapperFilePathPrefix = "/dev/mapper"
-
-	// kmsConfigPath is the location of the vault config file.
-	kmsConfigPath = "/etc/ceph-csi-encryption-kms-config/config.json"
 
 	// Passphrase size - 20 bytes is 160 bits to satisfy:
 	// https://tools.ietf.org/html/rfc6749#section-10.10
@@ -52,11 +52,11 @@ var (
 )
 
 type VolumeEncryption struct {
-	KMS EncryptionKMS
+	KMS kms.EncryptionKMS
 
 	// dekStore that will be used, this can be the EncryptionKMS or a
 	// different object implementing the DEKStore interface.
-	dekStore DEKStore
+	dekStore kms.DEKStore
 
 	id string
 }
@@ -74,7 +74,7 @@ func FetchEncryptionKMSID(encrypted, kmsID string) (string, error) {
 	}
 
 	if kmsID == "" {
-		kmsID = defaultKMSType
+		kmsID = kms.DefaultKMSType
 	}
 
 	return kmsID, nil
@@ -86,24 +86,24 @@ func FetchEncryptionKMSID(encrypted, kmsID string) (string, error) {
 // Callers that receive a ErrDEKStoreNeeded error, should use
 // VolumeEncryption.SetDEKStore() to configure an alternative storage for the
 // DEKs.
-func NewVolumeEncryption(id string, kms EncryptionKMS) (*VolumeEncryption, error) {
+func NewVolumeEncryption(id string, ekms kms.EncryptionKMS) (*VolumeEncryption, error) {
 	kmsID := id
 	if kmsID == "" {
 		// if kmsID is not set, encryption is enabled, and the type is
 		// SecretsKMS
-		kmsID = defaultKMSType
+		kmsID = kms.DefaultKMSType
 	}
 
 	ve := &VolumeEncryption{
 		id:  kmsID,
-		KMS: kms,
+		KMS: ekms,
 	}
 
-	if kms.requiresDEKStore() == DEKStoreIntegrated {
-		dekStore, ok := kms.(DEKStore)
+	if ekms.RequiresDEKStore() == kms.DEKStoreIntegrated {
+		dekStore, ok := ekms.(kms.DEKStore)
 		if !ok {
 			return nil, fmt.Errorf("KMS %T does not implement the "+
-				"DEKStore interface", kms)
+				"DEKStore interface", ekms)
 		}
 
 		ve.dekStore = dekStore
@@ -116,7 +116,7 @@ func NewVolumeEncryption(id string, kms EncryptionKMS) (*VolumeEncryption, error
 
 // SetDEKStore sets the DEKStore for this VolumeEncryption instance. It will be
 // used when StoreNewCryptoPassphrase() or RemoveDEK() is called.
-func (ve *VolumeEncryption) SetDEKStore(dekStore DEKStore) {
+func (ve *VolumeEncryption) SetDEKStore(dekStore kms.DEKStore) {
 	ve.dekStore = dekStore
 }
 
@@ -137,72 +137,6 @@ func (ve *VolumeEncryption) RemoveDEK(volumeID string) error {
 
 func (ve *VolumeEncryption) GetID() string {
 	return ve.id
-}
-
-// EncryptionKMS provides external Key Management System for encryption
-// passphrases storage.
-type EncryptionKMS interface {
-	Destroy()
-
-	// requiresDEKStore returns the DEKStoreType that is needed to be
-	// configure for the KMS. Nothing needs to be done when this function
-	// returns DEKStoreIntegrated, otherwise you will need to configure an
-	// alternative storage for the DEKs.
-	requiresDEKStore() DEKStoreType
-
-	// EncryptDEK provides a way for a KMS to encrypt a DEK. In case the
-	// encryption is done transparently inside the KMS service, the
-	// function can return an unencrypted value.
-	EncryptDEK(volumeID, plainDEK string) (string, error)
-
-	// DecryptDEK provides a way for a KMS to decrypt a DEK. In case the
-	// encryption is done transparently inside the KMS service, the
-	// function does not need to do anything except return the encyptedDEK
-	// as it was received.
-	DecryptDEK(volumeID, encyptedDEK string) (string, error)
-}
-
-// DEKStoreType describes what DEKStore needs to be configured when using a
-// particular KMS. A KMS might support different DEKStores depending on its
-// configuration.
-type DEKStoreType string
-
-const (
-	// DEKStoreIntegrated indicates that the KMS itself supports storing
-	// DEKs.
-	DEKStoreIntegrated = DEKStoreType("")
-	// DEKStoreMetadata indicates that the KMS should be configured to
-	// store the DEK in the metadata of the volume.
-	DEKStoreMetadata = DEKStoreType("metadata")
-)
-
-// DEKStore allows KMS instances to implement a modular backend for DEK
-// storage. This can be used to store the DEK in a different location, in case
-// the KMS can not store passphrases for volumes.
-type DEKStore interface {
-	// StoreDEK saves the DEK in the configured store.
-	StoreDEK(volumeID string, dek string) error
-	// FetchDEK reads the DEK from the configured store and returns it.
-	FetchDEK(volumeID string) (string, error)
-	// RemoveDEK deletes the DEK from the configured store.
-	RemoveDEK(volumeID string) error
-}
-
-// integratedDEK is a DEKStore that can not be configured. Either the KMS does
-// not use a DEK, or the DEK is stored in the KMS without additional
-// configuration options.
-type integratedDEK struct{}
-
-func (i integratedDEK) requiresDEKStore() DEKStoreType {
-	return DEKStoreIntegrated
-}
-
-func (i integratedDEK) EncryptDEK(volumeID, plainDEK string) (string, error) {
-	return plainDEK, nil
-}
-
-func (i integratedDEK) DecryptDEK(volumeID, encyptedDEK string) (string, error) {
-	return encyptedDEK, nil
 }
 
 // StoreCryptoPassphrase takes an unencrypted passphrase, encrypts it and saves
@@ -262,7 +196,7 @@ func VolumeMapper(volumeID string) (mapperFile, mapperFilePath string) {
 
 // EncryptVolume encrypts provided device with LUKS.
 func EncryptVolume(ctx context.Context, devicePath, passphrase string) error {
-	DebugLog(ctx, "Encrypting device %s with LUKS", devicePath)
+	log.DebugLog(ctx, "Encrypting device %s with LUKS", devicePath)
 	if _, _, err := LuksFormat(devicePath, passphrase); err != nil {
 		return fmt.Errorf("failed to encrypt device %s with LUKS: %w", devicePath, err)
 	}
@@ -272,10 +206,10 @@ func EncryptVolume(ctx context.Context, devicePath, passphrase string) error {
 
 // OpenEncryptedVolume opens volume so that it can be used by the client.
 func OpenEncryptedVolume(ctx context.Context, devicePath, mapperFile, passphrase string) error {
-	DebugLog(ctx, "Opening device %s with LUKS on %s", devicePath, mapperFile)
+	log.DebugLog(ctx, "Opening device %s with LUKS on %s", devicePath, mapperFile)
 	_, stderr, err := LuksOpen(devicePath, mapperFile, passphrase)
 	if err != nil {
-		ErrorLog(ctx, "failed to open LUKS device %q: %s", devicePath, stderr)
+		log.ErrorLog(ctx, "failed to open LUKS device %q: %s", devicePath, stderr)
 	}
 
 	return err
@@ -283,10 +217,10 @@ func OpenEncryptedVolume(ctx context.Context, devicePath, mapperFile, passphrase
 
 // ResizeEncryptedVolume resizes encrypted volume so that it can be used by the client.
 func ResizeEncryptedVolume(ctx context.Context, mapperFile string) error {
-	DebugLog(ctx, "Resizing LUKS device %s", mapperFile)
+	log.DebugLog(ctx, "Resizing LUKS device %s", mapperFile)
 	_, stderr, err := LuksResize(mapperFile)
 	if err != nil {
-		ErrorLog(ctx, "failed to resize LUKS device %s: %s", mapperFile, stderr)
+		log.ErrorLog(ctx, "failed to resize LUKS device %s: %s", mapperFile, stderr)
 	}
 
 	return err
@@ -294,7 +228,7 @@ func ResizeEncryptedVolume(ctx context.Context, mapperFile string) error {
 
 // CloseEncryptedVolume closes encrypted volume so it can be detached.
 func CloseEncryptedVolume(ctx context.Context, mapperFile string) error {
-	DebugLog(ctx, "Closing LUKS device %s", mapperFile)
+	log.DebugLog(ctx, "Closing LUKS device %s", mapperFile)
 	_, _, err := LuksClose(mapperFile)
 
 	return err
@@ -317,7 +251,7 @@ func DeviceEncryptionStatus(ctx context.Context, devicePath string) (mappedDevic
 	mapPath := strings.TrimPrefix(devicePath, mapperFilePathPrefix+"/")
 	stdout, _, err := LuksStatus(mapPath)
 	if err != nil {
-		DebugLog(ctx, "device %s is not an active LUKS device: %v", devicePath, err)
+		log.DebugLog(ctx, "device %s is not an active LUKS device: %v", devicePath, err)
 
 		return devicePath, "", nil
 	}

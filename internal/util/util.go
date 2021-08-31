@@ -26,6 +26,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ceph/ceph-csi/internal/util/log"
+
 	"golang.org/x/sys/unix"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/cloud-provider/volume/helpers"
@@ -216,7 +218,7 @@ func parseKernelRelease(release string) (int, int, int, int, error) {
 func CheckKernelSupport(release string, supportedVersions []KernelVersion) bool {
 	version, patchlevel, sublevel, extraversion, err := parseKernelRelease(release)
 	if err != nil {
-		ErrorLogMsg("%v", err)
+		log.ErrorLogMsg("%v", err)
 
 		return false
 	}
@@ -242,7 +244,7 @@ func CheckKernelSupport(release string, supportedVersions []KernelVersion) bool 
 			}
 		}
 	}
-	ErrorLogMsg("kernel %s does not support required features", release)
+	log.ErrorLogMsg("kernel %s does not support required features", release)
 
 	return false
 }
@@ -340,20 +342,6 @@ func contains(s []string, key string) bool {
 	}
 
 	return false
-}
-
-// getKeys takes a map that uses strings for keys and returns a slice with the
-// keys.
-func getKeys(m map[string]interface{}) []string {
-	keys := make([]string, len(m))
-
-	i := 0
-	for k := range m {
-		keys[i] = k
-		i++
-	}
-
-	return keys
 }
 
 // CallStack returns the stack of the calls in the current goroutine. Useful

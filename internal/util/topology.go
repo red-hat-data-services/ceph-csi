@@ -22,6 +22,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ceph/ceph-csi/internal/util/k8s"
+	"github.com/ceph/ceph-csi/internal/util/log"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -32,7 +35,7 @@ const (
 )
 
 func k8sGetNodeLabels(nodeName string) (map[string]string, error) {
-	client := NewK8sClient()
+	client := k8s.NewK8sClient()
 	node, err := client.CoreV1().Nodes().Get(context.TODO(), nodeName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get node %q information: %w", nodeName, err)
@@ -59,7 +62,7 @@ func GetTopologyFromDomainLabels(domainLabels, nodeName, driverName string) (map
 
 	// Convert passed in labels to a map, and check for uniqueness
 	labelsToRead := strings.SplitN(domainLabels, labelSeparator, -1)
-	DefaultLog("passed in node labels for processing: %+v", labelsToRead)
+	log.DefaultLog("passed in node labels for processing: %+v", labelsToRead)
 
 	labelsIn := make(map[string]bool)
 	labelCount := 0
@@ -106,7 +109,7 @@ func GetTopologyFromDomainLabels(domainLabels, nodeName, driverName string) (map
 		return nil, fmt.Errorf("missing domain labels %v on node %q", missingLabels, nodeName)
 	}
 
-	DefaultLog("list of domains processed: %+v", domainMap)
+	log.DefaultLog("list of domains processed: %+v", domainMap)
 
 	topology := make(map[string]string)
 	for domain, value := range domainMap {

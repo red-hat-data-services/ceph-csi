@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+package kms
 
 import (
 	"context"
@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/ceph/ceph-csi/internal/util/k8s"
 
 	"github.com/hashicorp/vault/api"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
@@ -179,7 +181,7 @@ Example JSON structure in the KMS config is,
 */
 type vaultTenantConnection struct {
 	vaultConnection
-	integratedDEK
+	IntegratedDEK
 
 	client *kubernetes.Clientset
 
@@ -202,13 +204,13 @@ type VaultTokensKMS struct {
 	TokenName string
 }
 
-var _ = RegisterKMSProvider(KMSProvider{
+var _ = RegisterProvider(Provider{
 	UniqueID:    kmsTypeVaultTokens,
 	Initializer: initVaultTokensKMS,
 })
 
 // InitVaultTokensKMS returns an interface to HashiCorp Vault KMS.
-func initVaultTokensKMS(args KMSInitializerArgs) (EncryptionKMS, error) {
+func initVaultTokensKMS(args ProviderInitArgs) (EncryptionKMS, error) {
 	var err error
 
 	config := args.Config
@@ -438,7 +440,7 @@ func (vtc *vaultTenantConnection) initCertificates(config map[string]interface{}
 
 func (vtc *vaultTenantConnection) getK8sClient() *kubernetes.Clientset {
 	if vtc.client == nil {
-		vtc.client = NewK8sClient()
+		vtc.client = k8s.NewK8sClient()
 	}
 
 	return vtc.client

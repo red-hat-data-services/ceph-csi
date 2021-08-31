@@ -14,13 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+package kms
 
 import (
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+
+	"github.com/ceph/ceph-csi/internal/util/k8s"
 
 	"github.com/aws/aws-sdk-go/aws"
 	awsCreds "github.com/aws/aws-sdk-go/aws/credentials"
@@ -58,7 +60,7 @@ const (
 	awsCMK          = "AWS_CMK_ARN"
 )
 
-var _ = RegisterKMSProvider(KMSProvider{
+var _ = RegisterProvider(Provider{
 	UniqueID:    kmsTypeAWSMetadata,
 	Initializer: initAWSMetadataKMS,
 })
@@ -76,7 +78,7 @@ type AWSMetadataKMS struct {
 	cmk             string
 }
 
-func initAWSMetadataKMS(args KMSInitializerArgs) (EncryptionKMS, error) {
+func initAWSMetadataKMS(args ProviderInitArgs) (EncryptionKMS, error) {
 	kms := &AWSMetadataKMS{
 		namespace: args.Namespace,
 	}
@@ -123,7 +125,7 @@ func initAWSMetadataKMS(args KMSInitializerArgs) (EncryptionKMS, error) {
 }
 
 func (kms *AWSMetadataKMS) getSecrets() (map[string]interface{}, error) {
-	c := NewK8sClient()
+	c := k8s.NewK8sClient()
 	secret, err := c.CoreV1().Secrets(kms.namespace).Get(context.TODO(),
 		kms.secretName, metav1.GetOptions{})
 	if err != nil {
@@ -150,10 +152,10 @@ func (kms *AWSMetadataKMS) Destroy() {
 	// Nothing to do.
 }
 
-// requiresDEKStore indicates that the DEKs should get stored in the metadata
+// RequiresDEKStore indicates that the DEKs should get stored in the metadata
 // of the volumes. This Amazon KMS provider does not support storing DEKs in
 // AWS as that adds additional costs.
-func (kms *AWSMetadataKMS) requiresDEKStore() DEKStoreType {
+func (kms *AWSMetadataKMS) RequiresDEKStore() DEKStoreType {
 	return DEKStoreMetadata
 }
 
