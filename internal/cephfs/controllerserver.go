@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 
+	cerrors "github.com/ceph/ceph-csi/internal/cephfs/errors"
 	csicommon "github.com/ceph/ceph-csi/internal/csi-common"
 	"github.com/ceph/ceph-csi/internal/util"
 	"github.com/ceph/ceph-csi/internal/util/log"
@@ -119,7 +120,7 @@ func checkContentSource(
 		snapshotID := req.VolumeContentSource.GetSnapshot().GetSnapshotId()
 		volOpt, _, sid, err := newSnapshotOptionsFromID(ctx, snapshotID, cr)
 		if err != nil {
-			if errors.Is(err, ErrSnapNotFound) {
+			if errors.Is(err, cerrors.ErrSnapNotFound) {
 				return nil, nil, nil, status.Error(codes.NotFound, err.Error())
 			}
 
@@ -132,7 +133,7 @@ func checkContentSource(
 		volID := req.VolumeContentSource.GetVolume().GetVolumeId()
 		parentVol, pvID, err := newVolumeOptionsFromVolID(ctx, volID, nil, req.Secrets)
 		if err != nil {
-			if !errors.Is(err, ErrVolumeNotFound) {
+			if !errors.Is(err, cerrors.ErrVolumeNotFound) {
 				return nil, nil, nil, status.Error(codes.NotFound, err.Error())
 			}
 
@@ -146,7 +147,7 @@ func checkContentSource(
 }
 
 // CreateVolume creates a reservation and the volume in backend, if it is not already present.
-// nolint:gocognit,gocyclo,nestif,cyclop // TODO: reduce complexity
+// nolint:gocyclo,cyclop // TODO: reduce complexity
 func (cs *ControllerServer) CreateVolume(
 	ctx context.Context,
 	req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
@@ -187,7 +188,6 @@ func (cs *ControllerServer) CreateVolume(
 	if req.GetCapacityRange() != nil {
 		volOptions.Size = util.RoundOffBytes(req.GetCapacityRange().GetRequiredBytes())
 	}
-	// TODO need to add check for 0 volume size
 
 	parentVol, pvID, sID, err := checkContentSource(ctx, req, cr)
 	if err != nil {
@@ -208,31 +208,6 @@ func (cs *ControllerServer) CreateVolume(
 	// TODO return error message if requested vol size greater than found volume return error
 
 	if vID != nil {
-		if sID != nil || pvID != nil {
-			// while cloning the volume the size is not populated properly to the new volume now.
-			// it will be fixed in cephfs soon with the parentvolume size. Till then by below
-			// resize we are making sure we return or satisfy the requested size by setting the size
-			// explicitly
-			err = volOptions.resizeVolume(ctx, volumeID(vID.FsSubvolName), volOptions.Size)
-			if err != nil {
-				purgeErr := volOptions.purgeVolume(ctx, volumeID(vID.FsSubvolName), false)
-				if purgeErr != nil {
-					log.ErrorLog(ctx, "failed to delete volume %s: %v", requestName, purgeErr)
-					// All errors other than ErrVolumeNotFound should return an error back to the caller
-					if !errors.Is(purgeErr, ErrVolumeNotFound) {
-						return nil, status.Error(codes.Internal, purgeErr.Error())
-					}
-				}
-				errUndo := undoVolReservation(ctx, volOptions, *vID, secret)
-				if errUndo != nil {
-					log.WarningLog(ctx, "failed undoing reservation of volume: %s (%s)",
-						requestName, errUndo)
-				}
-				log.ErrorLog(ctx, "failed to expand volume %s: %v", volumeID(vID.FsSubvolName), err)
-
-				return nil, status.Error(codes.Internal, err.Error())
-			}
-		}
 		volumeContext := req.GetParameters()
 		volumeContext["subvolumeName"] = vID.FsSubvolName
 		volumeContext["subvolumePath"] = volOptions.RootPath
@@ -288,7 +263,7 @@ func (cs *ControllerServer) CreateVolume(
 		if purgeErr != nil {
 			log.ErrorLog(ctx, "failed to delete volume %s: %v", vID.FsSubvolName, purgeErr)
 			// All errors other than ErrVolumeNotFound should return an error back to the caller
-			if !errors.Is(purgeErr, ErrVolumeNotFound) {
+			if !errors.Is(purgeErr, cerrors.ErrVolumeNotFound) {
 				// If the subvolume deletion is failed, we should not cleanup
 				// the OMAP entry it will stale subvolume in cluster.
 				// set err=nil so that when we get the request again we can get
@@ -375,7 +350,7 @@ func (cs *ControllerServer) DeleteVolume(
 		log.ErrorLog(ctx, "Error returned from newVolumeOptionsFromVolID: %v", err)
 
 		// All errors other than ErrVolumeNotFound should return an error back to the caller
-		if !errors.Is(err, ErrVolumeNotFound) {
+		if !errors.Is(err, cerrors.ErrVolumeNotFound) {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
@@ -413,11 +388,11 @@ func (cs *ControllerServer) DeleteVolume(
 
 	if err = volOptions.purgeVolume(ctx, volumeID(vID.FsSubvolName), false); err != nil {
 		log.ErrorLog(ctx, "failed to delete volume %s: %v", volID, err)
-		if errors.Is(err, ErrVolumeHasSnapshots) {
+		if errors.Is(err, cerrors.ErrVolumeHasSnapshots) {
 			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		}
 
-		if !errors.Is(err, ErrVolumeNotFound) {
+		if !errors.Is(err, cerrors.ErrVolumeNotFound) {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
@@ -554,7 +529,7 @@ func (cs *ControllerServer) CreateSnapshot(
 			return nil, status.Error(codes.NotFound, err.Error())
 		}
 
-		if errors.Is(err, ErrVolumeNotFound) {
+		if errors.Is(err, cerrors.ErrVolumeNotFound) {
 			return nil, status.Error(codes.NotFound, err.Error())
 		}
 
@@ -598,7 +573,7 @@ func (cs *ControllerServer) CreateSnapshot(
 		// Check error code value against ErrInvalidCommand to understand the cluster
 		// support it or not, It's safe to evaluate as the filtering
 		// is already done from getSubVolumeInfo() and send out the error here.
-		if errors.Is(err, ErrInvalidCommand) {
+		if errors.Is(err, cerrors.ErrInvalidCommand) {
 			return nil, status.Error(
 				codes.FailedPrecondition,
 				"subvolume info command not supported in current ceph cluster")
@@ -775,7 +750,7 @@ func (cs *ControllerServer) DeleteSnapshot(
 			// or partially complete (snap and snapOMap are garbage collected already), hence return
 			// success as deletion is complete
 			return &csi.DeleteSnapshotResponse{}, nil
-		case errors.Is(err, ErrSnapNotFound):
+		case errors.Is(err, cerrors.ErrSnapNotFound):
 			err = undoSnapReservation(ctx, volOpt, *sid, sid.FsSnapshotName, cr)
 			if err != nil {
 				log.ErrorLog(ctx, "failed to remove reservation for snapname (%s) with backing snap (%s) (%s)",
@@ -785,7 +760,7 @@ func (cs *ControllerServer) DeleteSnapshot(
 			}
 
 			return &csi.DeleteSnapshotResponse{}, nil
-		case errors.Is(err, ErrVolumeNotFound):
+		case errors.Is(err, cerrors.ErrVolumeNotFound):
 			// if the error is ErrVolumeNotFound, the subvolume is already deleted
 			// from backend, Hence undo the omap entries and return success
 			log.ErrorLog(ctx, "Volume not present")
