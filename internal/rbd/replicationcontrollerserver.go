@@ -44,18 +44,6 @@ const (
 	imageMirrorModeSnapshot imageMirroringMode = "snapshot"
 )
 
-// imageMirroringState represents the image mirroring state.
-type imageMirroringState string
-
-const (
-	// If the state is unknown means the rbd-mirror daemon is
-	// running and the image is demoted on both the clusters.
-	unknown imageMirroringState = "unknown"
-
-	// If the state is error means image need resync.
-	errorState imageMirroringState = "error"
-)
-
 const (
 	// mirroringMode + key to get the imageMirroringMode from parameters.
 	imageMirroringKey = "mirroringMode"
@@ -523,16 +511,16 @@ func (rs *ReplicationServer) DemoteVolume(ctx context.Context,
 func checkRemoteSiteStatus(ctx context.Context, mirrorStatus *librbd.GlobalMirrorImageStatus) bool {
 	ready := true
 	for _, s := range mirrorStatus.SiteStatuses {
+		log.UsefulLog(
+			ctx,
+			"peer site mirrorUUID=%q, daemon up=%t, mirroring state=%q, description=%q and lastUpdate=%d",
+			s.MirrorUUID,
+			s.Up,
+			s.State,
+			s.Description,
+			s.LastUpdate)
 		if s.MirrorUUID != "" {
-			if imageMirroringState(s.State.String()) != unknown && !s.Up {
-				log.UsefulLog(
-					ctx,
-					"peer site mirrorUUID=%s, mirroring state=%s, description=%s and lastUpdate=%s",
-					s.MirrorUUID,
-					s.State.String(),
-					s.Description,
-					s.LastUpdate)
-
+			if s.State != librbd.MirrorImageStatusStateUnknown && !s.Up {
 				ready = false
 			}
 		}
@@ -544,7 +532,6 @@ func checkRemoteSiteStatus(ctx context.Context, mirrorStatus *librbd.GlobalMirro
 // ResyncVolume extracts the RBD volume information from the volumeID, If the
 // image is present, mirroring is enabled and the image is in demoted state.
 // If yes it will resync the image to correct the split-brain.
-// FIXME: reduce complexity.
 func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 	req *replication.ResyncVolumeRequest,
 ) (*replication.ResyncVolumeResponse, error) {
@@ -619,7 +606,17 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 
 		return nil, fmt.Errorf("failed to get local status: %w", err)
 	}
-	state := imageMirroringState(localStatus.State.String())
+
+	// convert the last update time to UTC
+	lastUpdateTime := time.Unix(localStatus.LastUpdate, 0).UTC()
+	log.UsefulLog(
+		ctx,
+		"local status: daemon up=%t, image mirroring state=%q, description=%q and lastUpdate=%s",
+		localStatus.Up,
+		localStatus.State,
+		localStatus.Description,
+		lastUpdateTime)
+
 	//  To recover from split brain (up+error) state the image need to be
 	//  demoted and requested for resync on site-a and then the image on site-b
 	//  should be demoted. The volume should be marked to ready=true when the
@@ -630,7 +627,7 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 	// If the image state on both the sites are up+unknown consider that
 	// complete data is synced as the last snapshot
 	// gets exchanged between the clusters.
-	if state == unknown && localStatus.Up {
+	if localStatus.State == librbd.MirrorImageStatusStateUnknown && localStatus.Up {
 		ready = checkRemoteSiteStatus(ctx, mirrorStatus)
 	}
 
@@ -648,20 +645,35 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 		return nil, status.Error(codes.Unavailable, "awaiting initial resync due to split brain")
 	}
 
-	// convert the last update time to UTC
-	lastUpdateTime := time.Unix(localStatus.LastUpdate, 0).UTC()
-	log.UsefulLog(
-		ctx,
-		"image mirroring state=%s, description=%s and lastUpdate=%s",
-		localStatus.State.String(),
-		localStatus.Description,
-		lastUpdateTime)
+	err = checkVolumeResyncStatus(localStatus)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 
 	resp := &replication.ResyncVolumeResponse{
 		Ready: ready,
 	}
 
 	return resp, nil
+}
+
+func checkVolumeResyncStatus(localStatus librbd.SiteMirrorImageStatus) error {
+	// we are considering 2 states to check resync started and resync completed
+	// as below. all other states will be considered as an error state so that
+	// cephCSI can return error message and volume replication operator can
+	// mark the VolumeReplication status as not resyncing for the volume.
+
+	// If the state is Replaying means the resync is going on.
+	// Once the volume on remote cluster is demoted and resync
+	// is completed the image state will be moved to UNKNOWN .
+	if localStatus.State != librbd.MirrorImageStatusStateReplaying &&
+		localStatus.State != librbd.MirrorImageStatusStateUnknown {
+		return fmt.Errorf(
+			"not resyncing. image is in %q state",
+			localStatus.State)
+	}
+
+	return nil
 }
 
 // resyncRequired returns true if local image is in split-brain state and image
@@ -673,7 +685,7 @@ func resyncRequired(localStatus librbd.SiteMirrorImageStatus) bool {
 	// be in an error state. It would be also worth considering the `description`
 	// field to make sure about split-brain.
 	splitBrain := "split-brain"
-	if strings.Contains(localStatus.State.String(), string(errorState)) ||
+	if localStatus.State == librbd.MirrorImageStatusStateError ||
 		strings.Contains(localStatus.Description, splitBrain) {
 		return true
 	}
