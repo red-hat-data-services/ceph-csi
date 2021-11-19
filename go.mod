@@ -70,6 +70,8 @@ replace (
 	k8s.io/mount-utils => k8s.io/mount-utils v0.22.1
 	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.22.1
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.22.1
+	// layeh.com seems to be misbehaving
+	layeh.com/radius => github.com/layeh/radius v0.0.0-20190322222518-890bc1058917
 )
 
 // This tag doesn't exist, but is imported by github.com/portworx/sched-ops.
