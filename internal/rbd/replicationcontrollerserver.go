@@ -290,9 +290,9 @@ func createDummyImage(ctx context.Context, rbdVol *rbdVolume) error {
 		if err != nil {
 			return err
 		}
-		dummyVol := rbdVol
+		dummyVol := *rbdVol
 		dummyVol.RbdImageName = imgName
-		err = createImage(ctx, dummyVol, dummyVol.conn.Creds)
+		err = createImage(ctx, &dummyVol, dummyVol.conn.Creds)
 		if err != nil && !strings.Contains(err.Error(), "File exists") {
 			return err
 		}
@@ -310,7 +310,7 @@ func tickleMirroringOnDummyImage(rbdVol *rbdVolume, mirroringMode librbd.ImageMi
 	if err != nil {
 		return err
 	}
-	dummyVol := rbdVol
+	dummyVol := *rbdVol
 	dummyVol.RbdImageName = imgName
 
 	dummyImageOpsLock.Lock()
@@ -523,12 +523,6 @@ func (rs *ReplicationServer) PromoteVolume(ctx context.Context,
 		return nil, status.Errorf(codes.Internal, "failed to get mirroring mode %s", err.Error())
 	}
 
-	log.DebugLog(ctx, "Attempting to tickle dummy image for restarting RBD schedules")
-	err = tickleMirroringOnDummyImage(rbdVol, mode)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to enable mirroring on dummy image %s", err.Error())
-	}
-
 	interval, startTime := getSchedulingDetails(req.GetParameters())
 	if interval != admin.NoInterval {
 		err = rbdVol.addSnapshotScheduling(interval, startTime)
@@ -541,6 +535,12 @@ func (rs *ReplicationServer) PromoteVolume(ctx context.Context,
 			interval,
 			startTime,
 			rbdVol)
+	}
+
+	log.DebugLog(ctx, "attempting to tickle dummy image for restarting RBD schedules")
+	err = tickleMirroringOnDummyImage(rbdVol, mode)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to enable mirroring on dummy image %s", err.Error())
 	}
 
 	return &replication.PromoteVolumeResponse{}, nil
