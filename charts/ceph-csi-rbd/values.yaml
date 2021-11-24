@@ -254,6 +254,13 @@ storageClass:
   # Specifies whether the storageclass should be created
   create: false
   name: csi-rbd-sc
+
+  # Annotations for the storage class
+  # Example:
+  # annotations:
+  #   storageclass.kubernetes.io/is-default-class: "true"
+  annotations: {}
+
   # (required) String representing a Ceph cluster to provision storage from.
   # Should be unique across all Ceph clusters in use for provisioning,
   # cannot be greater than 36 bytes in length, and should remain immutable for
@@ -281,6 +288,15 @@ storageClass:
   # features. If `journaling` is enabled, must enable `exclusive-lock` too.
   # imageFeatures: layering,journaling,exclusive-lock
   imageFeatures: layering
+
+  # (optional) Specifies whether to try other mounters in case if the current
+  # mounter fails to mount the rbd image for any reason. True means fallback
+  # to next mounter, default is set to false.
+  # Note: tryOtherMounters is currently useful to fallback from krbd to rbd-nbd
+  # in case if any of the specified imageFeatures is not supported by krbd
+  # driver on node scheduled for application pod launch, but in the future this
+  # should work with any mounter type.
+  # tryOtherMounters: false
 
   # (optional) uncomment the following to use rbd-nbd as mounter
   # on supported nodes
@@ -346,6 +362,11 @@ storageClass:
   # https://docs.ceph.com/docs/master/man/8/rbd/#kernel-rbd-krbd-options
   # For nbd options refer
   # https://docs.ceph.com/docs/master/man/8/rbd-nbd/#options
+  # Format:
+  # mapOptions: "<mounter>:op1,op2;<mounter>:op1,op2"
+  # An empty mounter field is treated as krbd type for compatibility.
+  # eg:
+  # mapOptions: "krbd:lock_on_read,queue_depth=1024;nbd:try-netlink"
   mapOptions: ""
 
   # (optional) unmapOptions is a comma-separated list of unmap options.
@@ -353,6 +374,11 @@ storageClass:
   # https://docs.ceph.com/docs/master/man/8/rbd/#kernel-rbd-krbd-options
   # For nbd options refer
   # https://docs.ceph.com/docs/master/man/8/rbd-nbd/#options
+  # Format:
+  # unmapOptions: "<mounter>:op1,op2;<mounter>:op1,op2"
+  # An empty mounter field is treated as krbd type for compatibility.
+  # eg:
+  # unmapOptions: "krbd:force;nbd:force"
   unmapOptions: ""
 
   # The secrets have to contain Ceph credentials with required access

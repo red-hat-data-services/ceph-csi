@@ -41,6 +41,18 @@ func isRetryableAPIError(err error) bool {
 		return true
 	}
 
+	// "transport is closing" is an internal gRPC err, we can not use ErrConnClosing
+	if strings.Contains(err.Error(), "transport is closing") {
+		return true
+	}
+
+	// "transport: missing content-type field" is an error that sometimes
+	// is returned while talking to the kubernetes-api-server. There does
+	// not seem to be a public error constant for this.
+	if strings.Contains(err.Error(), "transport: missing content-type field") {
+		return true
+	}
+
 	return false
 }
 

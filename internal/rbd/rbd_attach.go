@@ -29,6 +29,7 @@ import (
 	"github.com/ceph/ceph-csi/internal/util"
 	"github.com/ceph/ceph-csi/internal/util/log"
 
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -67,10 +68,13 @@ const (
 	setNbdIOTimeout = "io-timeout"
 )
 
-var hasNBD = false
+var (
+	hasNBD              = true
+	hasNBDCookieSupport = false
+)
 
 func init() {
-	hasNBD = checkRbdNbdTools()
+	setRbdNbdToolFeatures()
 }
 
 // rbdDeviceInfo strongly typed JSON spec for rbd device list output (of type krbd).
@@ -193,27 +197,89 @@ func waitForPath(ctx context.Context, pool, namespace, image string, maxRetries 
 	return "", false
 }
 
-// Check if rbd-nbd tools are installed.
-func checkRbdNbdTools() bool {
+// set features available with rbd-nbd, and NBD module loaded status.
+func setRbdNbdToolFeatures() {
 	// check if the module is loaded or compiled in
 	_, err := os.Stat(fmt.Sprintf("/sys/module/%s", moduleNbd))
 	if os.IsNotExist(err) {
 		// try to load the module
 		_, _, err = util.ExecCommand(context.TODO(), "modprobe", moduleNbd)
 		if err != nil {
-			log.ExtendedLogMsg("rbd-nbd: nbd modprobe failed with error %v", err)
-
-			return false
+			hasNBD = false
+			log.WarningLogMsg("rbd-nbd: nbd modprobe failed with error %v", err)
 		}
 	}
-	if _, _, err := util.ExecCommand(context.TODO(), rbdTonbd, "--version"); err != nil {
-		log.ExtendedLogMsg("rbd-nbd: running rbd-nbd --version failed with error %v", err)
 
-		return false
+	stdout, stderr, err := util.ExecCommand(context.TODO(), rbdTonbd, "--help")
+	if err != nil || stderr != "" {
+		hasNBD = false
+		log.WarningLogMsg("running rbd-nbd --help failed with error:%v, stderr:%s", err, stderr)
 	}
-	log.ExtendedLogMsg("rbd-nbd tools were found.")
 
-	return true
+	if strings.Contains(stdout, "--cookie") {
+		hasNBDCookieSupport = true
+	}
+
+	log.DefaultLog("NBD module loaded: %t, rbd-nbd supported features, cookie: %t", hasNBD, hasNBDCookieSupport)
+}
+
+// parseMapOptions helps parse formatted mapOptions and unmapOptions and
+// returns mounter specific options.
+func parseMapOptions(mapOptions string) (string, string, error) {
+	var krbdMapOptions, nbdMapOptions string
+	const (
+		noKeyLength = 1
+		validLength = 2
+	)
+	for _, item := range strings.Split(mapOptions, ";") {
+		var mounter, options string
+		if item == "" {
+			continue
+		}
+		s := strings.Split(item, ":")
+		switch len(s) {
+		case noKeyLength:
+			options = strings.TrimSpace(s[0])
+			krbdMapOptions = options
+		case validLength:
+			mounter = strings.TrimSpace(s[0])
+			options = strings.TrimSpace(s[1])
+			switch strings.ToLower(mounter) {
+			case accessTypeKRbd:
+				krbdMapOptions = options
+			case accessTypeNbd:
+				nbdMapOptions = options
+			default:
+				return "", "", fmt.Errorf("unknown mounter type: %q", mounter)
+			}
+		default:
+			return "", "", fmt.Errorf("badly formatted map/unmap options: %q", mapOptions)
+		}
+	}
+
+	return krbdMapOptions, nbdMapOptions, nil
+}
+
+// getMapOptions is a wrapper func, calls parse map/unmap funcs and feeds the
+// rbdVolume object.
+func getMapOptions(req *csi.NodeStageVolumeRequest, rv *rbdVolume) error {
+	krbdMapOptions, nbdMapOptions, err := parseMapOptions(req.GetVolumeContext()["mapOptions"])
+	if err != nil {
+		return err
+	}
+	krbdUnmapOptions, nbdUnmapOptions, err := parseMapOptions(req.GetVolumeContext()["unmapOptions"])
+	if err != nil {
+		return err
+	}
+	if rv.Mounter == rbdDefaultMounter {
+		rv.MapOptions = krbdMapOptions
+		rv.UnmapOptions = krbdUnmapOptions
+	} else if rv.Mounter == rbdNbdMounter {
+		rv.MapOptions = nbdMapOptions
+		rv.UnmapOptions = nbdUnmapOptions
+	}
+
+	return nil
 }
 
 func attachRBDImage(ctx context.Context, volOptions *rbdVolume, device string, cr *util.Credentials) (string, error) {
@@ -244,7 +310,7 @@ func attachRBDImage(ctx context.Context, volOptions *rbdVolume, device string, c
 	return devicePath, err
 }
 
-func appendNbdDeviceTypeAndOptions(cmdArgs []string, isThick bool, userOptions string) []string {
+func appendNbdDeviceTypeAndOptions(cmdArgs []string, isThick bool, userOptions, cookie string) []string {
 	cmdArgs = append(cmdArgs, "--device-type", accessTypeNbd)
 
 	isUnmap := CheckSliceContains(cmdArgs, "unmap")
@@ -257,6 +323,10 @@ func appendNbdDeviceTypeAndOptions(cmdArgs []string, isThick bool, userOptions s
 		}
 		if !strings.Contains(userOptions, setNbdIOTimeout) {
 			cmdArgs = append(cmdArgs, "--options", fmt.Sprintf("%s=%d", setNbdIOTimeout, defaultNbdIOTimeout))
+		}
+
+		if hasNBDCookieSupport {
+			cmdArgs = append(cmdArgs, "--options", fmt.Sprintf("cookie=%s", cookie))
 		}
 
 		if isThick {
@@ -303,7 +373,7 @@ func appendKRbdDeviceTypeAndOptions(cmdArgs []string, isThick bool, userOptions 
 
 // appendRbdNbdCliOptions append mandatory options and convert list of useroptions
 // provided for rbd integrated cli to rbd-nbd cli format specific.
-func appendRbdNbdCliOptions(cmdArgs []string, userOptions string) []string {
+func appendRbdNbdCliOptions(cmdArgs []string, userOptions, cookie string) []string {
 	if !strings.Contains(userOptions, useNbdNetlink) {
 		cmdArgs = append(cmdArgs, fmt.Sprintf("--%s", useNbdNetlink))
 	}
@@ -312,6 +382,9 @@ func appendRbdNbdCliOptions(cmdArgs []string, userOptions string) []string {
 	}
 	if !strings.Contains(userOptions, setNbdIOTimeout) {
 		cmdArgs = append(cmdArgs, fmt.Sprintf("--%s=%d", setNbdIOTimeout, defaultNbdIOTimeout))
+	}
+	if hasNBDCookieSupport {
+		cmdArgs = append(cmdArgs, fmt.Sprintf("--cookie=%s", cookie))
 	}
 	if userOptions != "" {
 		options := strings.Split(userOptions, ",")
@@ -356,11 +429,11 @@ func createPath(ctx context.Context, volOpt *rbdVolume, device string, cr *util.
 		// TODO: use rbd cli for attach/detach in the future
 		cli = rbdNbdMounter
 		mapArgs = append(mapArgs, "attach", imagePath, "--device", device)
-		mapArgs = appendRbdNbdCliOptions(mapArgs, volOpt.MapOptions)
+		mapArgs = appendRbdNbdCliOptions(mapArgs, volOpt.MapOptions, volOpt.VolID)
 	} else {
 		mapArgs = append(mapArgs, "map", imagePath)
 		if isNbd {
-			mapArgs = appendNbdDeviceTypeAndOptions(mapArgs, isThick, volOpt.MapOptions)
+			mapArgs = appendNbdDeviceTypeAndOptions(mapArgs, isThick, volOpt.MapOptions, volOpt.VolID)
 		} else {
 			mapArgs = appendKRbdDeviceTypeAndOptions(mapArgs, isThick, volOpt.MapOptions)
 		}
@@ -470,7 +543,7 @@ func detachRBDImageOrDeviceSpec(
 
 	unmapArgs := []string{"unmap", dArgs.imageOrDeviceSpec}
 	if dArgs.isNbd {
-		unmapArgs = appendNbdDeviceTypeAndOptions(unmapArgs, false, dArgs.unmapOptions)
+		unmapArgs = appendNbdDeviceTypeAndOptions(unmapArgs, false, dArgs.unmapOptions, dArgs.volumeID)
 	} else {
 		unmapArgs = appendKRbdDeviceTypeAndOptions(unmapArgs, false, dArgs.unmapOptions)
 	}
