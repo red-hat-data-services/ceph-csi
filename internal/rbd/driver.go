@@ -17,6 +17,10 @@ limitations under the License.
 package rbd
 
 import (
+	"fmt"
+
+	casrbd "github.com/ceph/ceph-csi/internal/csi-addons/rbd"
+	csiaddons "github.com/ceph/ceph-csi/internal/csi-addons/server"
 	csicommon "github.com/ceph/ceph-csi/internal/csi-common"
 	"github.com/ceph/ceph-csi/internal/journal"
 	"github.com/ceph/ceph-csi/internal/util"
@@ -39,6 +43,9 @@ type Driver struct {
 	ns  *NodeServer
 	cs  *ControllerServer
 	rs  *ReplicationServer
+
+	// cas is the CSIAddonsServer where CSI-Addons services are handled
+	cas *csiaddons.CSIAddonsServer
 }
 
 var (
@@ -102,6 +109,9 @@ func NewNodeServer(d *csicommon.CSIDriver, t string, topology map[string]string)
 
 // Run start a non-blocking grpc controller,node and identityserver for
 // rbd CSI driver which can serve multiple parallel requests.
+//
+// This also configures and starts a new CSI-Addons service, by calling
+// setupCSIAddonsServer().
 func (r *Driver) Run(conf *util.Config) {
 	var err error
 	var topology map[string]string
@@ -120,6 +130,12 @@ func (r *Driver) Run(conf *util.Config) {
 	// Create instances of the volume and snapshot journal
 	volJournal = journal.NewCSIVolumeJournal(CSIInstanceID)
 	snapJournal = journal.NewCSISnapshotJournal(CSIInstanceID)
+
+	// configre CSI-Addons server and components
+	err = r.setupCSIAddonsServer(conf)
+	if err != nil {
+		log.FatalLogMsg(err.Error())
+	}
 
 	// Initialize default library driver
 	r.cd = csicommon.NewCSIDriver(conf.DriverName, util.DriverVersion, conf.NodeID)
@@ -198,13 +214,9 @@ func (r *Driver) Run(conf *util.Config) {
 		log.WarningLogMsg("EnableGRPCMetrics is deprecated")
 		go util.StartMetricsServer(conf)
 	}
-	if conf.EnableProfiling {
-		if !conf.EnableGRPCMetrics {
-			go util.StartMetricsServer(conf)
-		}
-		log.DebugLogMsg("Registering profiling handler")
-		go util.EnableProfiling()
-	}
+
+	r.startProfiling(conf)
+
 	if conf.IsNodeServer {
 		go func() {
 			// TODO: move the healer to csi-addons
@@ -215,4 +227,40 @@ func (r *Driver) Run(conf *util.Config) {
 		}()
 	}
 	s.Wait()
+}
+
+// setupCSIAddonsServer creates a new CSI-Addons Server on the given (URL)
+// endpoint. The supported CSI-Addons operations get registered as their own
+// services.
+func (r *Driver) setupCSIAddonsServer(conf *util.Config) error {
+	var err error
+
+	r.cas, err = csiaddons.NewCSIAddonsServer(conf.CSIAddonsEndpoint)
+	if err != nil {
+		return fmt.Errorf("failed to create CSI-Addons server: %w", err)
+	}
+
+	// register services
+	is := casrbd.NewIdentityServer(conf)
+	r.cas.RegisterService(is)
+
+	// start the server, this does not block, it runs a new go-routine
+	err = r.cas.Start()
+	if err != nil {
+		return fmt.Errorf("failed to start CSI-Addons server: %w", err)
+	}
+
+	return nil
+}
+
+// startProfiling checks which profiling options are enabled in the config and
+// starts the required profiling services.
+func (r *Driver) startProfiling(conf *util.Config) {
+	if conf.EnableProfiling {
+		if !conf.EnableGRPCMetrics {
+			go util.StartMetricsServer(conf)
+		}
+		log.DebugLogMsg("Registering profiling handler")
+		go util.EnableProfiling()
+	}
 }
