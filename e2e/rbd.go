@@ -37,6 +37,8 @@ var (
 	rbdDeploymentName  = "csi-rbdplugin-provisioner"
 	rbdDaemonsetName   = "csi-rbdplugin"
 	defaultRBDPool     = "replicapool"
+	erasureCodedPool   = "ec-pool"
+	noDataPool         = ""
 	// Topology related variables.
 	nodeRegionLabel     = "test.failure-domain/region"
 	regionValue         = "testregion"
@@ -465,6 +467,75 @@ var _ = Describe("RBD", func() {
 				validateRBDImageCount(f, 0, defaultRBDPool)
 			})
 
+			By("create an erasure coded PVC and bind it to an app", func() {
+				err := deleteResource(rbdExamplePath + "storageclass.yaml")
+				if err != nil {
+					e2elog.Failf("failed to delete storageclass: %v", err)
+				}
+				err = createRBDStorageClass(
+					f.ClientSet,
+					f,
+					defaultSCName,
+					nil,
+					map[string]string{
+						"dataPool": erasureCodedPool,
+						"pool":     defaultRBDPool,
+					},
+					deletePolicy)
+				if err != nil {
+					e2elog.Failf("failed to create storageclass: %v", err)
+				}
+				pvc, app, err := createPVCAndAppBinding(pvcPath, appPath, f, deployTimeout)
+				if err != nil {
+					e2elog.Failf("failed to create pvc and application binding: %v", err)
+				}
+				err = checkPVCDataPoolForImageInPool(f, pvc, defaultRBDPool, "ec-pool")
+				if err != nil {
+					e2elog.Failf("failed to check data pool for image: %v", err)
+				}
+				err = deletePVCAndApp("", f, pvc, app)
+				if err != nil {
+					e2elog.Failf("failed to delete pvc and application : %v", err)
+				}
+				// validate created backend rbd images
+				validateRBDImageCount(f, 0, defaultRBDPool)
+			})
+
+			By("create an erasure coded PVC and validate snapshot restore", func() {
+				validatePVCSnapshot(
+					defaultCloneCount,
+					pvcPath,
+					appPath,
+					snapshotPath,
+					pvcClonePath,
+					appClonePath,
+					noKMS, noKMS,
+					defaultSCName,
+					erasureCodedPool,
+					f)
+			})
+
+			By("create an erasure coded PVC and validate PVC-PVC clone", func() {
+				validatePVCClone(
+					defaultCloneCount,
+					pvcPath,
+					appPath,
+					pvcSmartClonePath,
+					appSmartClonePath,
+					erasureCodedPool,
+					noKMS,
+					noPVCValidation,
+					f)
+				err := deleteResource(rbdExamplePath + "storageclass.yaml")
+				if err != nil {
+					e2elog.Failf("failed to delete storageclass: %v", err)
+				}
+				err = createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, nil, deletePolicy)
+				if err != nil {
+					e2elog.Failf("failed to create storageclass: %v", err)
+				}
+			})
+
 			By("create a PVC and bind it to an app with ext4 as the FS ", func() {
 				err := deleteResource(rbdExamplePath + "storageclass.yaml")
 				if err != nil {
@@ -577,6 +648,80 @@ var _ = Describe("RBD", func() {
 					}
 				}
 			})
+
+			By("create PVC with layering,fast-diff image-features and bind it to an app",
+				func() {
+					if util.CheckKernelSupport(kernelRelease, fastDiffSupport) {
+						err := deleteResource(rbdExamplePath + "storageclass.yaml")
+						if err != nil {
+							e2elog.Failf("failed to delete storageclass: %v", err)
+						}
+						err = createRBDStorageClass(
+							f.ClientSet,
+							f,
+							defaultSCName,
+							nil,
+							map[string]string{
+								"imageFeatures": "layering,exclusive-lock,object-map,fast-diff",
+							},
+							deletePolicy)
+						if err != nil {
+							e2elog.Failf("failed to create storageclass: %v", err)
+						}
+						err = validatePVCAndAppBinding(pvcPath, appPath, f)
+						if err != nil {
+							e2elog.Failf("failed to validate CephFS pvc and application binding: %v", err)
+						}
+						// validate created backend rbd images
+						validateRBDImageCount(f, 0, defaultRBDPool)
+						err = deleteResource(rbdExamplePath + "storageclass.yaml")
+						if err != nil {
+							e2elog.Failf("failed to delete storageclass: %v", err)
+						}
+						err = createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, nil, deletePolicy)
+						if err != nil {
+							e2elog.Failf("failed to create storageclass: %v", err)
+						}
+					}
+				})
+
+			By("create PVC with journaling,fast-diff image-features and bind it to an app using rbd-nbd mounter",
+				func() {
+					if util.CheckKernelSupport(kernelRelease, fastDiffSupport) {
+						err := deleteResource(rbdExamplePath + "storageclass.yaml")
+						if err != nil {
+							e2elog.Failf("failed to delete storageclass: %v", err)
+						}
+						// Storage class with rbd-nbd mounter
+						err = createRBDStorageClass(
+							f.ClientSet,
+							f,
+							defaultSCName,
+							nil,
+							map[string]string{
+								"mounter":       "rbd-nbd",
+								"imageFeatures": "layering,journaling,exclusive-lock,object-map,fast-diff",
+							},
+							deletePolicy)
+						if err != nil {
+							e2elog.Failf("failed to create storageclass: %v", err)
+						}
+						err = validatePVCAndAppBinding(pvcPath, appPath, f)
+						if err != nil {
+							e2elog.Failf("failed to validate CephFS pvc and application binding: %v", err)
+						}
+						// validate created backend rbd images
+						validateRBDImageCount(f, 0, defaultRBDPool)
+						err = deleteResource(rbdExamplePath + "storageclass.yaml")
+						if err != nil {
+							e2elog.Failf("failed to delete storageclass: %v", err)
+						}
+						err = createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, nil, deletePolicy)
+						if err != nil {
+							e2elog.Failf("failed to create storageclass: %v", err)
+						}
+					}
+				})
 
 			// NOTE: RWX is restricted for FileSystem VolumeMode at ceph-csi,
 			// see pull#261 for more details.
@@ -1475,6 +1620,7 @@ var _ = Describe("RBD", func() {
 					appClonePath,
 					noKMS, noKMS,
 					defaultSCName,
+					noDataPool,
 					f)
 			})
 
@@ -1485,6 +1631,7 @@ var _ = Describe("RBD", func() {
 					appPath,
 					pvcSmartClonePath,
 					appSmartClonePath,
+					noDataPool,
 					noKMS,
 					noPVCValidation,
 					f)
@@ -1502,7 +1649,15 @@ var _ = Describe("RBD", func() {
 					e2elog.Failf("failed to create storageclass: %v", err)
 				}
 
-				validatePVCClone(1, pvcPath, appPath, pvcSmartClonePath, appSmartClonePath, noKMS, isThickPVC, f)
+				validatePVCClone(1,
+					pvcPath,
+					appPath,
+					pvcSmartClonePath,
+					appSmartClonePath,
+					noDataPool,
+					noKMS,
+					isThickPVC,
+					f)
 
 				err = deleteResource(rbdExamplePath + "storageclass.yaml")
 				if err != nil {
@@ -1531,7 +1686,7 @@ var _ = Describe("RBD", func() {
 				validatePVCSnapshot(1,
 					pvcPath, appPath, snapshotPath, pvcClonePath, appClonePath,
 					vaultKMS, vaultKMS,
-					defaultSCName,
+					defaultSCName, noDataPool,
 					f)
 
 				err = deleteResource(rbdExamplePath + "storageclass.yaml")
@@ -1577,7 +1732,7 @@ var _ = Describe("RBD", func() {
 				validatePVCSnapshot(1,
 					pvcPath, appPath, snapshotPath, pvcClonePath, appClonePath,
 					vaultKMS, vaultTenantSAKMS,
-					restoreSCName, f)
+					restoreSCName, noDataPool, f)
 
 				err = retryKubectlArgs(cephCSINamespace, kubectlDelete, deployTimeout, "storageclass", restoreSCName)
 				if err != nil {
@@ -1636,7 +1791,7 @@ var _ = Describe("RBD", func() {
 				validatePVCSnapshot(1,
 					pvcPath, appPath, snapshotPath, pvcClonePath, appClonePath,
 					vaultKMS, secretsMetadataKMS,
-					restoreSCName, f)
+					restoreSCName, noDataPool, f)
 
 				// delete user secret
 				err = retryKubectlFile(namespace,
@@ -1681,7 +1836,15 @@ var _ = Describe("RBD", func() {
 					e2elog.Failf("failed to create storageclass: %v", err)
 				}
 
-				validatePVCClone(1, pvcPath, appPath, pvcSmartClonePath, appSmartClonePath, secretsMetadataKMS, isEncryptedPVC, f)
+				validatePVCClone(1,
+					pvcPath,
+					appPath,
+					pvcSmartClonePath,
+					appSmartClonePath,
+					noDataPool,
+					secretsMetadataKMS,
+					isEncryptedPVC,
+					f)
 
 				err = deleteResource(rbdExamplePath + "storageclass.yaml")
 				if err != nil {
@@ -1707,7 +1870,15 @@ var _ = Describe("RBD", func() {
 					e2elog.Failf("failed to create storageclass: %v", err)
 				}
 
-				validatePVCClone(1, pvcPath, appPath, pvcSmartClonePath, appSmartClonePath, vaultKMS, isEncryptedPVC, f)
+				validatePVCClone(1,
+					pvcPath,
+					appPath,
+					pvcSmartClonePath,
+					appSmartClonePath,
+					noDataPool,
+					vaultKMS,
+					isEncryptedPVC,
+					f)
 
 				err = deleteResource(rbdExamplePath + "storageclass.yaml")
 				if err != nil {
@@ -1736,6 +1907,7 @@ var _ = Describe("RBD", func() {
 					rawAppPath,
 					pvcBlockSmartClonePath,
 					appBlockSmartClonePath,
+					noDataPool,
 					noKMS,
 					noPVCValidation,
 					f)

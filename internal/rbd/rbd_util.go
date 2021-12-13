@@ -200,34 +200,30 @@ type migrationVolID struct {
 	clusterID string
 }
 
-var (
-	supportedFeatures = map[string]imageFeature{
-		librbd.FeatureNameLayering: {
-			needRbdNbd: false,
-		},
-		librbd.FeatureNameExclusiveLock: {
-			needRbdNbd: false,
-		},
-		librbd.FeatureNameObjectMap: {
-			needRbdNbd: false,
-			dependsOn:  []string{librbd.FeatureNameExclusiveLock},
-		},
-		librbd.FeatureNameFastDiff: {
-			needRbdNbd: false,
-			dependsOn:  []string{librbd.FeatureNameObjectMap},
-		},
-		librbd.FeatureNameJournaling: {
-			needRbdNbd: true,
-			dependsOn:  []string{librbd.FeatureNameExclusiveLock},
-		},
-	}
+var supportedFeatures = map[string]imageFeature{
+	librbd.FeatureNameLayering: {
+		needRbdNbd: false,
+	},
+	librbd.FeatureNameExclusiveLock: {
+		needRbdNbd: false,
+	},
+	librbd.FeatureNameObjectMap: {
+		needRbdNbd: false,
+		dependsOn:  []string{librbd.FeatureNameExclusiveLock},
+	},
+	librbd.FeatureNameFastDiff: {
+		needRbdNbd: false,
+		dependsOn:  []string{librbd.FeatureNameObjectMap},
+	},
+	librbd.FeatureNameJournaling: {
+		needRbdNbd: true,
+		dependsOn:  []string{librbd.FeatureNameExclusiveLock},
+	},
+}
 
-	krbdFeatures uint64 // krbd features supported by the loaded driver.
-)
-
-// getKrbdSupportedFeatures load the module if needed and return supported
+// GetKrbdSupportedFeatures load the module if needed and return supported
 // features attribute as a string.
-func getKrbdSupportedFeatures() (string, error) {
+func GetKrbdSupportedFeatures() (string, error) {
 	// check if the module is loaded or compiled in
 	_, err := os.Stat(krbdSupportedFeaturesFile)
 	if err != nil {
@@ -254,8 +250,8 @@ func getKrbdSupportedFeatures() (string, error) {
 	return strings.TrimSuffix(string(val), "\n"), nil
 }
 
-// hexStringToInteger convert hex value to uint.
-func hexStringToInteger(hexString string) (uint64, error) {
+// HexStringToInteger convert hex value to uint.
+func HexStringToInteger(hexString string) (uint, error) {
 	// trim 0x prefix
 	numberStr := strings.TrimPrefix(strings.ToLower(hexString), "0x")
 
@@ -266,7 +262,7 @@ func hexStringToInteger(hexString string) (uint64, error) {
 		return 0, err
 	}
 
-	return output, nil
+	return uint(output), nil
 }
 
 // isKrbdFeatureSupported checks if a given Image Feature is supported by krbd
@@ -278,7 +274,7 @@ func isKrbdFeatureSupported(ctx context.Context, imageFeatures string) bool {
 
 	supported := true
 	for _, featureName := range imageFeatureSet.Names() {
-		if (uint64(librbd.FeatureSetFromNames(strings.Split(featureName, " "))) & krbdFeatures) == 0 {
+		if (uint(librbd.FeatureSetFromNames(strings.Split(featureName, " "))) & krbdFeatures) == 0 {
 			supported = false
 			log.ErrorLog(ctx, "krbd feature %q not supported", featureName)
 
@@ -1145,9 +1141,11 @@ func generateVolumeFromVolumeID(
 	return rbdVol, err
 }
 
-// genVolFromVolID generates a rbdVolume structure from the provided identifier, updating
+// GenVolFromVolID generates a rbdVolume structure from the provided identifier, updating
 // the structure with elements from on-disk image metadata as well.
-func genVolFromVolID(
+//
+// nolint // returns non-exported *rbdVolume, which is fine
+func GenVolFromVolID(
 	ctx context.Context,
 	volumeID string,
 	cr *util.Credentials,
