@@ -107,6 +107,9 @@ type rbdImage struct {
 	// identifying this rbd image
 	VolID string `json:"volID"`
 
+	// VolSize is the size of the RBD image backing this rbdImage.
+	VolSize int64
+
 	Monitors string
 	// JournalPool is the ceph pool in which the CSI Journal/CSI snapshot Journal is
 	// stored
@@ -123,6 +126,12 @@ type rbdImage struct {
 	// config maps in v1.0.0
 	RequestName string
 	NamePrefix  string
+
+	// ParentName represents the parent image name of the image.
+	ParentName string
+	// Parent Pool is the pool that contains the parent image.
+	ParentPool      string
+	ImageFeatureSet librbd.FeatureSet
 
 	// encryption provides access to optional VolumeEncryption functions
 	encryption *util.VolumeEncryption
@@ -148,23 +157,21 @@ type rbdVolume struct {
 	Topology            map[string]string
 	// DataPool is where the data for images in `Pool` are stored, this is used as the `--data-pool`
 	// argument when the pool is created, and is not used anywhere else
-	DataPool   string
-	ParentName string
-	// Parent Pool is the pool that contains the parent image.
-	ParentPool         string
-	imageFeatureSet    librbd.FeatureSet
-	AdminID            string `json:"adminId"`
-	UserID             string `json:"userId"`
-	Mounter            string `json:"mounter"`
+	DataPool           string
+	AdminID            string
+	UserID             string
+	Mounter            string
 	ReservedID         string
 	MapOptions         string
 	UnmapOptions       string
 	LogDir             string
 	LogStrategy        string
-	VolName            string `json:"volName"`
-	MonValueFromSecret string `json:"monValueFromSecret"`
-	VolSize            int64  `json:"volSize"`
-	DisableInUseChecks bool   `json:"disableInUseChecks"`
+	VolName            string
+	MonValueFromSecret string
+	// RequestedVolSize has the size of the volume requested by the user and
+	// this value will not be updated when doing getImageInfo() on rbdVolume.
+	RequestedVolSize   int64
+	DisableInUseChecks bool
 	readOnly           bool
 	Primary            bool
 	ThickProvision     bool
@@ -179,7 +186,6 @@ type rbdSnapshot struct {
 	SourceVolumeID string
 	ReservedID     string
 	RbdSnapName    string
-	SizeBytes      int64
 }
 
 // imageFeature represents required image features and value.
@@ -345,10 +351,10 @@ func createImage(ctx context.Context, pOpts *rbdVolume, cr *util.Credentials) er
 		}
 	}
 	log.DebugLog(ctx, logMsg,
-		pOpts, volSzMiB, pOpts.imageFeatureSet.Names(), pOpts.Monitors)
+		pOpts, volSzMiB, pOpts.ImageFeatureSet.Names(), pOpts.Monitors)
 
-	if pOpts.imageFeatureSet != 0 {
-		err := options.SetUint64(librbd.RbdImageOptionFeatures, uint64(pOpts.imageFeatureSet))
+	if pOpts.ImageFeatureSet != 0 {
+		err := options.SetUint64(librbd.RbdImageOptionFeatures, uint64(pOpts.ImageFeatureSet))
 		if err != nil {
 			return fmt.Errorf("failed to set image features: %w", err)
 		}
@@ -921,7 +927,7 @@ func (rv *rbdVolume) flatten() error {
 }
 
 func (rv *rbdVolume) hasFeature(feature uint64) bool {
-	return (uint64(rv.imageFeatureSet) & feature) == feature
+	return (uint64(rv.ImageFeatureSet) & feature) == feature
 }
 
 func (rv *rbdVolume) checkImageChainHasFeature(ctx context.Context, feature uint64) (bool, error) {
@@ -1051,7 +1057,31 @@ func genSnapFromSnapID(
 		}
 	}
 
+	err = updateSnapshotDetails(rbdSnap)
+	if err != nil {
+		return fmt.Errorf("failed to update snapshot details for %q: %w", rbdSnap, err)
+	}
+
 	return err
+}
+
+// updateSnapshotDetails will copies the details from the rbdVolume to the
+// rbdSnapshot. example copying size from rbdVolume to rbdSnapshot.
+func updateSnapshotDetails(rbdSnap *rbdSnapshot) error {
+	vol := generateVolFromSnap(rbdSnap)
+	err := vol.Connect(rbdSnap.conn.Creds)
+	if err != nil {
+		return err
+	}
+	defer vol.Destroy()
+
+	err = vol.getImageInfo()
+	if err != nil {
+		return err
+	}
+	rbdSnap.VolSize = vol.VolSize
+
+	return nil
 }
 
 // generateVolumeFromVolumeID generates a rbdVolume structure from the provided identifier.
@@ -1287,7 +1317,7 @@ func genVolFromVolumeOptions(
 		ctx,
 		"setting disableInUseChecks: %t image features: %v mounter: %s",
 		disableInUseChecks,
-		rbdVol.imageFeatureSet.Names(),
+		rbdVol.ImageFeatureSet.Names(),
 		rbdVol.Mounter)
 	rbdVol.DisableInUseChecks = disableInUseChecks
 
@@ -1325,7 +1355,7 @@ func (rv *rbdVolume) validateImageFeatures(imageFeatures string) error {
 			return fmt.Errorf("feature %s requires rbd-nbd for mounter", f)
 		}
 	}
-	rv.imageFeatureSet = librbd.FeatureSetFromNames(arr)
+	rv.ImageFeatureSet = librbd.FeatureSetFromNames(arr)
 
 	return nil
 }
@@ -1358,7 +1388,7 @@ func genSnapFromOptions(ctx context.Context, rbdVol *rbdVolume, snapOptions map[
 
 // hasSnapshotFeature checks if Layering is enabled for this image.
 func (rv *rbdVolume) hasSnapshotFeature() bool {
-	return (uint64(rv.imageFeatureSet) & librbd.FeatureLayering) == librbd.FeatureLayering
+	return (uint64(rv.ImageFeatureSet) & librbd.FeatureLayering) == librbd.FeatureLayering
 }
 
 func (rv *rbdVolume) createSnapshot(ctx context.Context, pOpts *rbdSnapshot) error {
@@ -1422,10 +1452,10 @@ func (rv *rbdVolume) cloneRbdImageFromSnapshot(
 	}
 
 	log.DebugLog(ctx, logMsg,
-		pSnapOpts, rv, rv.imageFeatureSet.Names(), rv.Monitors)
+		pSnapOpts, rv, rv.ImageFeatureSet.Names(), rv.Monitors)
 
-	if rv.imageFeatureSet != 0 {
-		err = options.SetUint64(librbd.RbdImageOptionFeatures, uint64(rv.imageFeatureSet))
+	if rv.ImageFeatureSet != 0 {
+		err = options.SetUint64(librbd.RbdImageOptionFeatures, uint64(rv.ImageFeatureSet))
 		if err != nil {
 			return fmt.Errorf("failed to set image features: %w", err)
 		}
@@ -1473,6 +1503,12 @@ func (rv *rbdVolume) cloneRbdImageFromSnapshot(
 		}
 	}
 
+	// get image latest information
+	err = rv.getImageInfo()
+	if err != nil {
+		return fmt.Errorf("failed to get image info of %s: %w", rv, err)
+	}
+
 	// Success! Do not delete the cloned image now :)
 	deleteClone = false
 
@@ -1499,7 +1535,7 @@ func (rv *rbdVolume) getImageInfo() error {
 	if err != nil {
 		return err
 	}
-	rv.imageFeatureSet = librbd.FeatureSet(features)
+	rv.ImageFeatureSet = librbd.FeatureSet(features)
 
 	// Get parent information.
 	parentInfo, err := image.GetParent()
@@ -1673,6 +1709,16 @@ func cleanupRBDImageMetadataStash(metaDataPath string) error {
 	}
 
 	return nil
+}
+
+// expand checks if the requestedVolume size and the existing image size both
+// are same. If they are same, it returns nil else it resizes the image.
+func (rv *rbdVolume) expand() error {
+	if rv.RequestedVolSize == rv.VolSize {
+		return nil
+	}
+
+	return rv.resize(rv.RequestedVolSize)
 }
 
 // resize the given volume to new size.
@@ -2070,4 +2116,23 @@ func strategicActionOnLogFile(ctx context.Context, logStrategy, logFile string) 
 	default:
 		log.ErrorLog(ctx, "unknown cephLogStrategy option %q: hint: 'remove'|'compress'|'preserve'", logStrategy)
 	}
+}
+
+// genVolFromVolIDWithMigration populate a rbdVol structure based on the volID format.
+func genVolFromVolIDWithMigration(
+	ctx context.Context, volID string, cr *util.Credentials, secrets map[string]string) (*rbdVolume, error) {
+	if isMigrationVolID(volID) {
+		pmVolID, pErr := parseMigrationVolID(volID)
+		if pErr != nil {
+			return nil, pErr
+		}
+
+		return genVolFromMigVolID(ctx, pmVolID, cr)
+	}
+	rv, err := GenVolFromVolID(ctx, volID, cr, secrets)
+	if err != nil {
+		rv.Destroy()
+	}
+
+	return rv, err
 }

@@ -128,7 +128,7 @@ func (rv *rbdVolume) generateTempClone() *rbdVolume {
 	tempClone.conn = rv.conn.Copy()
 	// The temp clone image need to have deep flatten feature
 	f := []string{librbd.FeatureNameLayering, librbd.FeatureNameDeepFlatten}
-	tempClone.imageFeatureSet = librbd.FeatureSetFromNames(f)
+	tempClone.ImageFeatureSet = librbd.FeatureSetFromNames(f)
 	tempClone.ClusterID = rv.ClusterID
 	tempClone.Monitors = rv.Monitors
 	tempClone.Pool = rv.Pool
@@ -177,6 +177,14 @@ func (rv *rbdVolume) createCloneFromImage(ctx context.Context, parentVol *rbdVol
 	err = j.StoreImageID(ctx, rv.JournalPool, rv.ReservedID, rv.ImageID)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to store volume %s: %v", rv, err)
+
+		return err
+	}
+
+	// expand the image if the requested size is greater than the current size
+	err = rv.expand()
+	if err != nil {
+		log.ErrorLog(ctx, "failed to resize volume %s: %v", rv, err)
 
 		return err
 	}

@@ -324,7 +324,7 @@ func createDummyImage(ctx context.Context, rbdVol *rbdVolume) error {
 			librbd.FeatureNameFastDiff,
 		}
 		features := librbd.FeatureSetFromNames(f)
-		dummyVol.imageFeatureSet = features
+		dummyVol.ImageFeatureSet = features
 		// create 1MiB dummy image. 1MiB=1048576 bytes
 		dummyVol.VolSize = 1048576
 		err = createImage(ctx, &dummyVol, dummyVol.conn.Creds)
@@ -557,7 +557,13 @@ func (rs *ReplicationServer) PromoteVolume(ctx context.Context,
 
 	// promote secondary to primary
 	if !mirroringInfo.Primary {
-		err = rbdVol.promoteImage(req.Force)
+		if req.GetForce() {
+			// workaround for https://github.com/ceph/ceph-csi/issues/2736
+			// TODO: remove this workaround when the issue is fixed
+			err = rbdVol.forcePromoteImage(cr)
+		} else {
+			err = rbdVol.promoteImage(req.GetForce())
+		}
 		if err != nil {
 			log.ErrorLog(ctx, err.Error())
 			// In case of the DR the image on the primary site cannot be

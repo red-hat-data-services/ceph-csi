@@ -1,3 +1,19 @@
+/*
+Copyright 2021 The Ceph-CSI Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package e2e
 
 import (
@@ -60,6 +76,8 @@ var (
 	appClonePath           = rbdExamplePath + "pod-restore.yaml"
 	appSmartClonePath      = rbdExamplePath + "pod-clone.yaml"
 	appBlockSmartClonePath = rbdExamplePath + "block-pod-clone.yaml"
+	pvcBlockRestorePath    = rbdExamplePath + "pvc-block-restore.yaml"
+	appBlockRestorePath    = rbdExamplePath + "pod-block-restore.yaml"
 	appEphemeralPath       = rbdExamplePath + "pod-ephemeral.yaml"
 	snapshotPath           = rbdExamplePath + "snapshot.yaml"
 	deployFSAppPath        = e2eTemplatesPath + "rbd-fs-deployment.yaml"
@@ -3336,6 +3354,181 @@ var _ = Describe("RBD", func() {
 				if err != nil {
 					e2elog.Failf("failed to validate rbd images in pool %s trash: %v", defaultRBDPool, err)
 				}
+			})
+
+			By("restore snapshot to a bigger size PVC", func() {
+				By("restore snapshot to bigger size pvc", func() {
+					err := deleteResource(rbdExamplePath + "storageclass.yaml")
+					if err != nil {
+						e2elog.Failf("failed to delete storageclass: %v", err)
+					}
+					err = createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, nil, deletePolicy)
+					if err != nil {
+						e2elog.Failf("failed to create storageclass: %v", err)
+					}
+					defer func() {
+						err = deleteResource(rbdExamplePath + "storageclass.yaml")
+						if err != nil {
+							e2elog.Failf("failed to delete storageclass: %v", err)
+						}
+					}()
+					err = createRBDSnapshotClass(f)
+					if err != nil {
+						e2elog.Failf("failed to create VolumeSnapshotClass: %v", err)
+					}
+					defer func() {
+						err = deleteRBDSnapshotClass()
+						if err != nil {
+							e2elog.Failf("failed to delete VolumeSnapshotClass: %v", err)
+						}
+					}()
+					// validate filesystem mode PVC
+					err = validateBiggerPVCFromSnapshot(f,
+						pvcPath,
+						appPath,
+						snapshotPath,
+						pvcClonePath,
+						appClonePath)
+					if err != nil {
+						e2elog.Failf("failed to validate restore bigger size clone: %v", err)
+					}
+					// validate block mode PVC
+					err = validateBiggerPVCFromSnapshot(f,
+						rawPvcPath,
+						rawAppPath,
+						snapshotPath,
+						pvcBlockRestorePath,
+						appBlockRestorePath)
+					if err != nil {
+						e2elog.Failf("failed to validate restore bigger size clone: %v", err)
+					}
+				})
+
+				By("restore snapshot to bigger size encrypted PVC with VaultKMS", func() {
+					scOpts := map[string]string{
+						"encrypted":       "true",
+						"encryptionKMSID": "vault-test",
+					}
+					err := createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, scOpts, deletePolicy)
+					if err != nil {
+						e2elog.Failf("failed to create storageclass: %v", err)
+					}
+					defer func() {
+						err = deleteResource(rbdExamplePath + "storageclass.yaml")
+						if err != nil {
+							e2elog.Failf("failed to delete storageclass: %v", err)
+						}
+					}()
+					err = createRBDSnapshotClass(f)
+					if err != nil {
+						e2elog.Failf("failed to create VolumeSnapshotClass: %v", err)
+					}
+					defer func() {
+						err = deleteRBDSnapshotClass()
+						if err != nil {
+							e2elog.Failf("failed to delete VolumeSnapshotClass: %v", err)
+						}
+					}()
+					// validate filesystem mode PVC
+					err = validateBiggerPVCFromSnapshot(f,
+						pvcPath,
+						appPath,
+						snapshotPath,
+						pvcClonePath,
+						appClonePath)
+					if err != nil {
+						e2elog.Failf("failed to validate restore bigger size clone: %v", err)
+					}
+					// validate block mode PVC
+					err = validateBiggerPVCFromSnapshot(f,
+						rawPvcPath,
+						rawAppPath,
+						snapshotPath,
+						pvcBlockRestorePath,
+						appBlockRestorePath)
+					if err != nil {
+						e2elog.Failf("failed to validate restore bigger size clone: %v", err)
+					}
+				})
+
+				By("validate image deletion", func() {
+					validateRBDImageCount(f, 0, defaultRBDPool)
+					err := waitToRemoveImagesFromTrash(f, defaultRBDPool, deployTimeout)
+					if err != nil {
+						e2elog.Failf("failed to validate rbd images in pool %s trash: %v", defaultRBDPool, err)
+					}
+				})
+			})
+
+			By("clone PVC to a bigger size PVC", func() {
+				By("clone PVC to bigger size encrypted PVC with VaultKMS", func() {
+					scOpts := map[string]string{
+						"encrypted":       "true",
+						"encryptionKMSID": "vault-test",
+					}
+					err := createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, scOpts, deletePolicy)
+					if err != nil {
+						e2elog.Failf("failed to create storageclass: %v", err)
+					}
+					defer func() {
+						err = deleteResource(rbdExamplePath + "storageclass.yaml")
+						if err != nil {
+							e2elog.Failf("failed to delete storageclass: %v", err)
+						}
+					}()
+
+					// validate filesystem mode PVC
+					err = validateBiggerCloneFromPVC(f,
+						pvcPath,
+						appPath,
+						pvcSmartClonePath,
+						appSmartClonePath)
+					if err != nil {
+						e2elog.Failf("failed to validate bigger size clone: %v", err)
+					}
+					// validate block mode PVC
+					err = validateBiggerCloneFromPVC(f,
+						rawPvcPath,
+						rawAppPath,
+						pvcBlockSmartClonePath,
+						appBlockSmartClonePath)
+					if err != nil {
+						e2elog.Failf("failed to validate bigger size clone: %v", err)
+					}
+				})
+
+				By("clone PVC to bigger size pvc", func() {
+					err := createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, nil, deletePolicy)
+					if err != nil {
+						e2elog.Failf("failed to create storageclass: %v", err)
+					}
+					// validate filesystem mode PVC
+					err = validateBiggerCloneFromPVC(f,
+						pvcPath,
+						appPath,
+						pvcSmartClonePath,
+						appSmartClonePath)
+					if err != nil {
+						e2elog.Failf("failed to validate bigger size clone: %v", err)
+					}
+					// validate block mode PVC
+					err = validateBiggerCloneFromPVC(f,
+						rawPvcPath,
+						rawAppPath,
+						pvcBlockSmartClonePath,
+						appBlockSmartClonePath)
+					if err != nil {
+						e2elog.Failf("failed to validate bigger size clone: %v", err)
+					}
+				})
+
+				By("validate image deletion", func() {
+					validateRBDImageCount(f, 0, defaultRBDPool)
+					err := waitToRemoveImagesFromTrash(f, defaultRBDPool, deployTimeout)
+					if err != nil {
+						e2elog.Failf("failed to validate rbd images in pool %s trash: %v", defaultRBDPool, err)
+					}
+				})
 			})
 
 			// Make sure this should be last testcase in this file, because
