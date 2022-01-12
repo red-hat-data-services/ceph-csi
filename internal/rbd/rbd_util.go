@@ -56,9 +56,8 @@ const (
 	// Output strings returned during invocation of "ceph rbd task add remove <imagespec>" when
 	// command is not supported by ceph manager. Used to check errors and recover when the command
 	// is unsupported.
-	rbdTaskRemoveCmdInvalidString1      = "no valid command found"
-	rbdTaskRemoveCmdInvalidString2      = "Error EINVAL: invalid command"
-	rbdTaskRemoveCmdAccessDeniedMessage = "Error EACCES:"
+	rbdTaskRemoveCmdInvalidString       = "No handler found"
+	rbdTaskRemoveCmdAccessDeniedMessage = "access denied:"
 
 	// image metadata key for thick-provisioning.
 	// As image metadata key starting with '.rbd' will not be copied when we do
@@ -388,7 +387,7 @@ func createImage(ctx context.Context, pOpts *rbdVolume, cr *util.Credentials) er
 		if err != nil {
 			// nolint:errcheck // deleteImage() will log errors in
 			// case it fails, no need to log them here again
-			_ = deleteImage(ctx, pOpts, cr)
+			_ = pOpts.deleteImage(ctx)
 
 			return fmt.Errorf("failed to thick provision image: %w", err)
 		}
@@ -397,7 +396,7 @@ func createImage(ctx context.Context, pOpts *rbdVolume, cr *util.Credentials) er
 		if err != nil {
 			// nolint:errcheck // deleteImage() will log errors in
 			// case it fails, no need to log them here again
-			_ = deleteImage(ctx, pOpts, cr)
+			_ = pOpts.deleteImage(ctx)
 
 			return fmt.Errorf("failed to mark image as thick-provisioned: %w", err)
 		}
@@ -595,53 +594,27 @@ func isNotMountPoint(mounter mount.Interface, stagingTargetPath string) (bool, e
 	return isNotMnt, err
 }
 
-// addRbdManagerTask adds a ceph manager task to execute command
-// asynchronously. If command is not found returns a bool set to false
-// example arg ["trash", "remove","pool/image"].
-func addRbdManagerTask(ctx context.Context, pOpts *rbdVolume, arg []string) (bool, error) {
-	args := []string{"rbd", "task", "add"}
-	args = append(args, arg...)
-	log.DebugLog(
-		ctx,
-		"executing %v for image (%s) using mon %s, pool %s",
-		args,
-		pOpts.RbdImageName,
-		pOpts.Monitors,
-		pOpts.Pool)
-	supported := true
-	_, stderr, err := util.ExecCommand(ctx, "ceph", args...)
-	if err != nil {
-		switch {
-		case strings.Contains(stderr, rbdTaskRemoveCmdInvalidString1) &&
-			strings.Contains(stderr, rbdTaskRemoveCmdInvalidString2):
-			log.WarningLog(
-				ctx,
-				"cluster with cluster ID (%s) does not support Ceph manager based rbd commands"+
-					"(minimum ceph version required is v14.2.3)",
-				pOpts.ClusterID)
-			supported = false
-		case strings.HasPrefix(stderr, rbdTaskRemoveCmdAccessDeniedMessage):
-			log.WarningLog(ctx, "access denied to Ceph MGR-based rbd commands on cluster ID (%s)", pOpts.ClusterID)
-			supported = false
-		default:
-			log.WarningLog(ctx, "uncaught error while scheduling a task (%v): %s", err, stderr)
-		}
-	}
-	if err != nil {
-		err = fmt.Errorf("%w. stdError:%s", err, stderr)
+// isCephMgrSupported determines if the cluster has support for MGR based operation
+// depending on the error.
+func isCephMgrSupported(ctx context.Context, clusterID string, err error) bool {
+	switch {
+	case err == nil:
+		return true
+	case strings.Contains(err.Error(), rbdTaskRemoveCmdInvalidString):
+		log.WarningLog(
+			ctx,
+			"cluster with cluster ID (%s) does not support Ceph manager based rbd commands"+
+				"(minimum ceph version required is v14.2.3)",
+			clusterID)
+
+		return false
+	case strings.Contains(err.Error(), rbdTaskRemoveCmdAccessDeniedMessage):
+		log.WarningLog(ctx, "access denied to Ceph MGR-based rbd commands on cluster ID (%s)", clusterID)
+
+		return false
 	}
 
-	return supported, err
-}
-
-// getTrashPath returns the image path for trash operation.
-func (rv *rbdVolume) getTrashPath() string {
-	trashPath := rv.Pool
-	if rv.RadosNamespace != "" {
-		trashPath = trashPath + "/" + rv.RadosNamespace
-	}
-
-	return trashPath + "/" + rv.ImageID
+	return true
 }
 
 // ensureImageCleanup finds image in trash and if found removes it
@@ -657,7 +630,7 @@ func (rv *rbdVolume) ensureImageCleanup(ctx context.Context) error {
 		if val.Name == rv.RbdImageName {
 			rv.ImageID = val.Id
 
-			return trashRemoveImage(ctx, rv, rv.conn.Creds)
+			return rv.trashRemoveImage(ctx)
 		}
 	}
 
@@ -665,66 +638,69 @@ func (rv *rbdVolume) ensureImageCleanup(ctx context.Context) error {
 }
 
 // deleteImage deletes a ceph image with provision and volume options.
-func deleteImage(ctx context.Context, pOpts *rbdVolume, cr *util.Credentials) error {
-	image := pOpts.RbdImageName
+func (rv *rbdVolume) deleteImage(ctx context.Context) error {
+	image := rv.RbdImageName
 
-	log.DebugLog(ctx, "rbd: delete %s using mon %s, pool %s", image, pOpts.Monitors, pOpts.Pool)
+	log.DebugLog(ctx, "rbd: delete %s using mon %s, pool %s", image, rv.Monitors, rv.Pool)
 
 	// Support deleting the older rbd images whose imageID is not stored in omap
-	err := pOpts.getImageID()
+	err := rv.getImageID()
 	if err != nil {
 		return err
 	}
 
-	if pOpts.isEncrypted() {
-		log.DebugLog(ctx, "rbd: going to remove DEK for %q", pOpts)
-		if err = pOpts.encryption.RemoveDEK(pOpts.VolID); err != nil {
-			log.WarningLog(ctx, "failed to clean the passphrase for volume %s: %s", pOpts.VolID, err)
+	if rv.isEncrypted() {
+		log.DebugLog(ctx, "rbd: going to remove DEK for %q", rv)
+		if err = rv.encryption.RemoveDEK(rv.VolID); err != nil {
+			log.WarningLog(ctx, "failed to clean the passphrase for volume %s: %s", rv.VolID, err)
 		}
 	}
 
-	err = pOpts.openIoctx()
+	err = rv.openIoctx()
 	if err != nil {
 		return err
 	}
 
-	rbdImage := librbd.GetImage(pOpts.ioctx, image)
+	rbdImage := librbd.GetImage(rv.ioctx, image)
 	err = rbdImage.Trash(0)
 	if err != nil {
-		log.ErrorLog(ctx, "failed to delete rbd image: %s, error: %v", pOpts, err)
+		log.ErrorLog(ctx, "failed to delete rbd image: %s, error: %v", rv, err)
 
 		return err
 	}
 
-	return trashRemoveImage(ctx, pOpts, cr)
+	return rv.trashRemoveImage(ctx)
 }
 
 // trashRemoveImage adds a task to trash remove an image using ceph manager if supported,
 // otherwise removes the image from trash.
-func trashRemoveImage(ctx context.Context, pOpts *rbdVolume, cr *util.Credentials) error {
+func (rv *rbdVolume) trashRemoveImage(ctx context.Context) error {
 	// attempt to use Ceph manager based deletion support if available
+	log.DebugLog(ctx, "rbd: adding task to remove image %q with id %q from trash", rv, rv.ImageID)
 
-	args := []string{
-		"trash", "remove",
-		pOpts.getTrashPath(),
-		"--id", cr.ID,
-		"--keyfile=" + cr.KeyFile,
-		"-m", pOpts.Monitors,
+	ta, err := rv.conn.GetTaskAdmin()
+	if err != nil {
+		return err
 	}
-	rbdCephMgrSupported, err := addRbdManagerTask(ctx, pOpts, args)
+
+	_, err = ta.AddTrashRemove(admin.NewImageSpec(rv.Pool, rv.RadosNamespace, rv.ImageID))
+
+	rbdCephMgrSupported := isCephMgrSupported(ctx, rv.ClusterID, err)
 	if rbdCephMgrSupported && err != nil {
-		log.ErrorLog(ctx, "failed to add task to delete rbd image: %s, %v", pOpts, err)
+		log.ErrorLog(ctx, "failed to add task to delete rbd image: %s, %v", rv, err)
 
 		return err
 	}
 
 	if !rbdCephMgrSupported {
-		err = librbd.TrashRemove(pOpts.ioctx, pOpts.ImageID, true)
+		err = librbd.TrashRemove(rv.ioctx, rv.ImageID, true)
 		if err != nil {
-			log.ErrorLog(ctx, "failed to delete rbd image: %s, %v", pOpts, err)
+			log.ErrorLog(ctx, "failed to delete rbd image: %s, %v", rv, err)
 
 			return err
 		}
+	} else {
+		log.DebugLog(ctx, "rbd: successfully added task to move image %q with id %q to trash", rv, rv.ImageID)
 	}
 
 	return nil
@@ -813,7 +789,7 @@ func flattenClonedRbdImages(
 
 	for _, snapName := range origNameList {
 		rv.RbdImageName = snapName.origSnapName
-		err = rv.flattenRbdImage(ctx, cr, true, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
+		err = rv.flattenRbdImage(ctx, true, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
 		if err != nil {
 			log.ErrorLog(ctx, "failed to flatten %s; err %v", rv, err)
 
@@ -826,7 +802,6 @@ func flattenClonedRbdImages(
 
 func (rv *rbdVolume) flattenRbdImage(
 	ctx context.Context,
-	cr *util.Credentials,
 	forceFlatten bool,
 	hardlimit, softlimit uint) error {
 	var depth uint
@@ -850,9 +825,17 @@ func (rv *rbdVolume) flattenRbdImage(
 	if !forceFlatten && (depth < hardlimit) && (depth < softlimit) {
 		return nil
 	}
-	args := []string{"flatten", rv.String(), "--id", cr.ID, "--keyfile=" + cr.KeyFile, "-m", rv.Monitors}
-	supported, err := addRbdManagerTask(ctx, rv, args)
-	if supported {
+
+	log.DebugLog(ctx, "rbd: adding task to flatten image %q", rv)
+
+	ta, err := rv.conn.GetTaskAdmin()
+	if err != nil {
+		return err
+	}
+
+	_, err = ta.AddFlatten(admin.NewImageSpec(rv.Pool, rv.RadosNamespace, rv.RbdImageName))
+	rbdCephMgrSupported := isCephMgrSupported(ctx, rv.ClusterID, err)
+	if rbdCephMgrSupported {
 		if err != nil {
 			// discard flattening error if the image does not have any parent
 			rbdFlattenNoParent := fmt.Sprintf("Image %s/%s does not have a parent", rv.Pool, rv.RbdImageName)
@@ -866,17 +849,14 @@ func (rv *rbdVolume) flattenRbdImage(
 		if forceFlatten || depth >= hardlimit {
 			return fmt.Errorf("%w: flatten is in progress for image %s", ErrFlattenInProgress, rv.RbdImageName)
 		}
+		log.DebugLog(ctx, "successfully added task to flatten image %q", rv)
 	}
-	if !supported {
+	if !rbdCephMgrSupported {
 		log.ErrorLog(
 			ctx,
 			"task manager does not support flatten,image will be flattened once hardlimit is reached: %v",
 			err)
 		if forceFlatten || depth >= hardlimit {
-			err = rv.Connect(cr)
-			if err != nil {
-				return err
-			}
 			err := rv.flatten()
 			if err != nil {
 				log.ErrorLog(ctx, "rbd failed to flatten image %s %s: %v", rv.Pool, rv.RbdImageName, err)

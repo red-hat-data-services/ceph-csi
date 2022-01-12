@@ -33,7 +33,7 @@ const (
 
 	// keyProtectMetadataDefaultSecretsName is the default name of the Kubernetes Secret
 	// that contains the credentials to access the Key Protect KMS. The name of
-	// the Secret can be configured by setting the `KMS_SECRET_NAME`
+	// the Secret can be configured by setting the `IBM_KP_SECRET_NAME`
 	// option.
 	//
 	// #nosec:G101, value not credential, just references token.
@@ -43,17 +43,18 @@ const (
 	// the credentials to access the Key ProtectKMS.
 	//
 	// #nosec:G101, no hardcoded secret, this is a configuration key.
-	keyProtectSecretNameKey = "KMS_SECRET_NAME"
-	keyProtectRegionKey     = "KP_REGION"
+	keyProtectSecretNameKey = "IBM_KP_SECRET_NAME"
+	keyProtectRegionKey     = "IBM_KP_REGION"
 
-	keyProtectServiceInstanceID = "KP_SERVICE_INSTANCE_ID"
+	keyProtectServiceInstanceID = "IBM_KP_SERVICE_INSTANCE_ID"
+	keyProtectServiceBaseURL    = "IBM_KP_BASE_URL"
+	keyProtectServiceTokenURL   = "IBM_KP_TOKEN_URL" //nolint:gosec // only configuration key
 	// The following options are part of the Kubernetes Secrets.
 	// #nosec:G101, no hardcoded secrets, only configuration keys.
-	keyProtectServiceAPIKey   = "KP_SERVICE_API_KEY"
-	KeyProtectCustomerRootKey = "KP_CUSTOMER_ROOT_KEY"
-
-	keyProtectSessionToken = "KP_SESSION_TOKEN"
-	keyProtectCRK          = "KP_CRK_ARN"
+	keyProtectServiceAPIKey   = "IBM_KP_SERVICE_API_KEY"
+	KeyProtectCustomerRootKey = "IBM_KP_CUSTOMER_ROOT_KEY"
+	keyProtectSessionToken    = "IBM_KP_SESSION_TOKEN" //nolint:gosec // only configuration key
+	keyProtectCRK             = "IBM_KP_CRK_ARN"
 )
 
 var _ = RegisterProvider(Provider{
@@ -72,6 +73,8 @@ type KeyProtectKMS struct {
 	serviceAPIKey     string
 	customerRootKey   string
 	serviceInstanceID string
+	baseURL           string
+	tokenURL          string
 	region            string
 	sessionToken      string
 	crk               string
@@ -92,6 +95,20 @@ func initKeyProtectKMS(args ProviderInitArgs) (EncryptionKMS, error) {
 	err = setConfigString(&kms.serviceInstanceID, args.Config, keyProtectServiceInstanceID)
 	if err != nil {
 		return nil, err
+	}
+
+	err = setConfigString(&kms.baseURL, args.Config, keyProtectServiceBaseURL)
+	if errors.Is(err, errConfigOptionInvalid) {
+		return nil, err
+	} else if errors.Is(err, errConfigOptionMissing) {
+		kms.baseURL = kp.DefaultBaseURL
+	}
+
+	err = setConfigString(&kms.tokenURL, args.Config, keyProtectServiceTokenURL)
+	if errors.Is(err, errConfigOptionInvalid) {
+		return nil, err
+	} else if errors.Is(err, errConfigOptionMissing) {
+		kms.tokenURL = kp.DefaultTokenURL
 	}
 
 	// read the Kubernetes Secret with credentials
@@ -169,9 +186,10 @@ func (kms *KeyProtectKMS) RequiresDEKStore() DEKStoreType {
 }
 
 func (kms *KeyProtectKMS) getService() error {
-	// Use your Service API Key and your KeyProtect Service Instance ID to create a ClientConfig
+	// Use Service API Key and KeyProtect Service Instance ID to create a ClientConfig
 	cc := kp.ClientConfig{
-		BaseURL:    kp.DefaultBaseURL,
+		BaseURL:    kms.baseURL,
+		TokenURL:   kms.tokenURL,
 		APIKey:     kms.serviceAPIKey,
 		InstanceID: kms.serviceInstanceID,
 	}

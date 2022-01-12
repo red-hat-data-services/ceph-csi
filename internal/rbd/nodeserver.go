@@ -375,7 +375,7 @@ func (ns *NodeServer) stageTransaction(
 		volOptions.readOnly = true
 	}
 
-	err = flattenImageBeforeMapping(ctx, volOptions, cr)
+	err = flattenImageBeforeMapping(ctx, volOptions)
 	if err != nil {
 		return transaction, err
 	}
@@ -527,8 +527,7 @@ func resizeEncryptedDevice(ctx context.Context, volID, stagingTargetPath, device
 
 func flattenImageBeforeMapping(
 	ctx context.Context,
-	volOptions *rbdVolume,
-	cr *util.Credentials) error {
+	volOptions *rbdVolume) error {
 	var err error
 	var feature bool
 	var depth uint
@@ -550,7 +549,7 @@ func flattenImageBeforeMapping(
 			return err
 		}
 		if feature || depth != 0 {
-			err = volOptions.flattenRbdImage(ctx, cr, true, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
+			err = volOptions.flattenRbdImage(ctx, true, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
 			if err != nil {
 				return err
 			}
@@ -1084,6 +1083,13 @@ func (ns *NodeServer) NodeGetCapabilities(
 				Type: &csi.NodeServiceCapability_Rpc{
 					Rpc: &csi.NodeServiceCapability_RPC{
 						Type: csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
+					},
+				},
+			},
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_SINGLE_NODE_MULTI_WRITER,
 					},
 				},
 			},

@@ -101,11 +101,17 @@ func (cs *ControllerServer) parseVolCreateRequest(
 	req *csi.CreateVolumeRequest) (*rbdVolume, error) {
 	// TODO (sbezverk) Last check for not exceeding total storage capacity
 
-	// RO modes need to be handled independently (ie right now even if access mode is RO, they'll be RW upon attach)
-	isBlock, isMultiNode := csicommon.IsBlockMultiNode(req.VolumeCapabilities)
+	// below capability check indicates that we support both {SINGLE_NODE or MULTI_NODE} WRITERs and the `isMultiWriter`
+	// flag has been set accordingly.
+	isMultiWriter, isBlock := csicommon.IsBlockMultiWriter(req.VolumeCapabilities)
 
+	// below return value has set, if it is RWO mode File PVC.
+	isRWOFile := csicommon.IsFileRWO(req.VolumeCapabilities)
+
+	// below return value has set, if it is ReadOnly capability.
+	isROOnly := csicommon.IsReaderOnly(req.VolumeCapabilities)
 	// We want to fail early if the user is trying to create a RWX on a non-block type device
-	if isMultiNode && !isBlock {
+	if !isRWOFile && !isBlock && !isROOnly {
 		return nil, status.Error(
 			codes.InvalidArgument,
 			"multi node access modes are only supported on rbd `block` type volumes")
@@ -115,11 +121,13 @@ func (cs *ControllerServer) parseVolCreateRequest(
 		return nil, status.Error(codes.InvalidArgument, "missing required parameter imageFeatures")
 	}
 
-	// if it's NOT SINGLE_NODE_WRITER and it's BLOCK we'll set the parameter to ignore the in-use checks
+	// if it's NOT SINGLE_NODE_WRITER, and it's BLOCK we'll set the parameter to ignore the in-use checks
 	rbdVol, err := genVolFromVolumeOptions(
 		ctx,
-		req.GetParameters(), req.GetSecrets(),
-		(isMultiNode && isBlock), false)
+		req.GetParameters(),
+		req.GetSecrets(),
+		isMultiWriter && isBlock,
+		false)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -363,7 +371,7 @@ func (cs *ControllerServer) repairExistingVolume(ctx context.Context, req *csi.C
 					rbdVol,
 					err)
 			} else if !thick {
-				err = deleteImage(ctx, rbdVol, cr)
+				err = rbdVol.deleteImage(ctx)
 				if err != nil {
 					return nil, status.Errorf(codes.Aborted, "failed to remove partially cloned volume %q: %s", rbdVol, err)
 				}
@@ -434,7 +442,7 @@ func cleanupThickClone(ctx context.Context,
 	parentVol *rbdVolume,
 	rbdSnap *rbdSnapshot,
 	cr *util.Credentials) error {
-	err := cleanUpSnapshot(ctx, parentVol, rbdSnap, rbdVol, cr)
+	err := cleanUpSnapshot(ctx, parentVol, rbdSnap, rbdVol)
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to remove partially cloned volume %q: %s", rbdVol, err)
 	}
@@ -521,12 +529,12 @@ func flattenTemporaryClonedImages(ctx context.Context, rbdVol *rbdVolume, cr *ut
 // return success,the hardlimit is reached it starts a task to flatten the
 // image and return Aborted.
 func checkFlatten(ctx context.Context, rbdVol *rbdVolume, cr *util.Credentials) error {
-	err := rbdVol.flattenRbdImage(ctx, cr, false, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
+	err := rbdVol.flattenRbdImage(ctx, false, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
 	if err != nil {
 		if errors.Is(err, ErrFlattenInProgress) {
 			return status.Error(codes.Aborted, err.Error())
 		}
-		if errDefer := deleteImage(ctx, rbdVol, cr); errDefer != nil {
+		if errDefer := rbdVol.deleteImage(ctx); errDefer != nil {
 			log.ErrorLog(ctx, "failed to delete rbd image: %s with error: %v", rbdVol, errDefer)
 
 			return status.Error(codes.Internal, err.Error())
@@ -660,7 +668,7 @@ func (cs *ControllerServer) createBackingImage(
 	defer func() {
 		if err != nil {
 			if !errors.Is(err, ErrFlattenInProgress) {
-				if deleteErr := deleteImage(ctx, rbdVol, cr); deleteErr != nil {
+				if deleteErr := rbdVol.deleteImage(ctx); deleteErr != nil {
 					log.ErrorLog(ctx, "failed to delete rbd image: %s with error: %v", rbdVol, deleteErr)
 				}
 			}
@@ -672,7 +680,7 @@ func (cs *ControllerServer) createBackingImage(
 	}
 
 	if rbdSnap != nil {
-		err = rbdVol.flattenRbdImage(ctx, cr, false, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
+		err = rbdVol.flattenRbdImage(ctx, false, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
 		if err != nil {
 			log.ErrorLog(ctx, "failed to flatten image %s: %v", rbdVol, err)
 
@@ -919,7 +927,7 @@ func cleanupRBDImage(ctx context.Context,
 	// delete the temporary rbd image created as part of volume clone during
 	// create volume
 	tempClone := rbdVol.generateTempClone()
-	err = deleteImage(ctx, tempClone, cr)
+	err = tempClone.deleteImage(ctx)
 	if err != nil {
 		if errors.Is(err, ErrImageNotFound) {
 			err = tempClone.ensureImageCleanup(ctx)
@@ -937,7 +945,7 @@ func cleanupRBDImage(ctx context.Context,
 
 	// Deleting rbd image
 	log.DebugLog(ctx, "deleting image %s", rbdVol.RbdImageName)
-	if err = deleteImage(ctx, rbdVol, cr); err != nil {
+	if err = rbdVol.deleteImage(ctx); err != nil {
 		log.ErrorLog(ctx, "failed to delete rbd image: %s with error: %v",
 			rbdVol, err)
 
@@ -1142,7 +1150,7 @@ func cloneFromSnapshot(
 		}
 	}
 
-	err = vol.flattenRbdImage(ctx, cr, false, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
+	err = vol.flattenRbdImage(ctx, false, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
 	if errors.Is(err, ErrFlattenInProgress) {
 		// if flattening is in progress, return error and do not cleanup
 		return nil, status.Errorf(codes.Internal, err.Error())
@@ -1210,7 +1218,7 @@ func (cs *ControllerServer) doSnapshotClone(
 		return cloneRbd, err
 	}
 
-	err = createRBDClone(ctx, parentVol, cloneRbd, rbdSnap, cr)
+	err = createRBDClone(ctx, parentVol, cloneRbd, rbdSnap)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to create snapshot: %v", err)
 
@@ -1221,7 +1229,7 @@ func (cs *ControllerServer) doSnapshotClone(
 		if err != nil {
 			if !errors.Is(err, ErrFlattenInProgress) {
 				// cleanup clone and snapshot
-				errCleanUp := cleanUpSnapshot(ctx, cloneRbd, rbdSnap, cloneRbd, cr)
+				errCleanUp := cleanUpSnapshot(ctx, cloneRbd, rbdSnap, cloneRbd)
 				if errCleanUp != nil {
 					log.ErrorLog(ctx, "failed to cleanup snapshot and clone: %v", errCleanUp)
 				}
@@ -1287,7 +1295,7 @@ func (cs *ControllerServer) doSnapshotClone(
 		return cloneRbd, err
 	}
 
-	err = cloneRbd.flattenRbdImage(ctx, cr, false, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
+	err = cloneRbd.flattenRbdImage(ctx, false, rbdHardMaxCloneDepth, rbdSoftMaxCloneDepth)
 	if err != nil {
 		return cloneRbd, err
 	}
@@ -1387,7 +1395,7 @@ func (cs *ControllerServer) DeleteSnapshot(
 	rbdVol.ImageID = rbdSnap.ImageID
 	// update parent name to delete the snapshot
 	rbdSnap.RbdImageName = rbdVol.RbdImageName
-	err = cleanUpSnapshot(ctx, rbdVol, rbdSnap, rbdVol, cr)
+	err = cleanUpSnapshot(ctx, rbdVol, rbdSnap, rbdVol)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to delete image: %v", err)
 

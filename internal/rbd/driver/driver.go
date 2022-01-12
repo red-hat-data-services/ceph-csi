@@ -125,6 +125,8 @@ func (r *Driver) Run(conf *util.Config) {
 			[]csi.VolumeCapability_AccessMode_Mode{
 				csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 				csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+				csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER,
+				csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER,
 			})
 	}
 
@@ -212,6 +214,19 @@ func (r *Driver) setupCSIAddonsServer(conf *util.Config) error {
 	// register services
 	is := casrbd.NewIdentityServer(conf)
 	r.cas.RegisterService(is)
+
+	if conf.IsControllerServer {
+		rs := casrbd.NewReclaimSpaceControllerServer()
+		r.cas.RegisterService(rs)
+
+		fcs := casrbd.NewFenceControllerServer()
+		r.cas.RegisterService(fcs)
+	}
+
+	if conf.IsNodeServer {
+		rs := casrbd.NewReclaimSpaceNodeServer()
+		r.cas.RegisterService(rs)
+	}
 
 	// start the server, this does not block, it runs a new go-routine
 	err = r.cas.Start()

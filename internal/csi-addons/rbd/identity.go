@@ -75,6 +75,19 @@ func (is *IdentityServer) GetCapabilities(
 						Type: identity.Capability_Service_CONTROLLER_SERVICE,
 					},
 				},
+			},
+			&identity.Capability{
+				Type: &identity.Capability_ReclaimSpace_{
+					ReclaimSpace: &identity.Capability_ReclaimSpace{
+						Type: identity.Capability_ReclaimSpace_OFFLINE,
+					},
+				},
+			}, &identity.Capability{
+				Type: &identity.Capability_NetworkFence_{
+					NetworkFence: &identity.Capability_NetworkFence{
+						Type: identity.Capability_NetworkFence_NETWORK_FENCE,
+					},
+				},
 			})
 	}
 
@@ -85,6 +98,13 @@ func (is *IdentityServer) GetCapabilities(
 				Type: &identity.Capability_Service_{
 					Service: &identity.Capability_Service{
 						Type: identity.Capability_Service_NODE_SERVICE,
+					},
+				},
+			},
+			&identity.Capability{
+				Type: &identity.Capability_ReclaimSpace_{
+					ReclaimSpace: &identity.Capability_ReclaimSpace{
+						Type: identity.Capability_ReclaimSpace_ONLINE,
 					},
 				},
 			})

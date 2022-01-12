@@ -30,6 +30,8 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	rp "github.com/csi-addons/replication-lib-utils/protosanitizer"
 	"github.com/csi-addons/spec/lib/go/replication"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -103,6 +105,18 @@ func isReplicationRequest(req interface{}) bool {
 	}
 
 	return isReplicationRequest
+}
+
+// NewMiddlewareServerOption creates a new grpc.ServerOption that configures a
+// common format for log messages and other gRPC related handlers.
+func NewMiddlewareServerOption(withMetrics bool) grpc.ServerOption {
+	middleWare := []grpc.UnaryServerInterceptor{contextIDInjector, logGRPC, panicHandler}
+
+	if withMetrics {
+		middleWare = append(middleWare, grpc_prometheus.UnaryServerInterceptor)
+	}
+
+	return grpc_middleware.WithUnaryServerChain(middleWare...)
 }
 
 func getReqID(req interface{}) string {
@@ -305,4 +319,73 @@ func IsBlockMultiNode(caps []*csi.VolumeCapability) (bool, bool) {
 	}
 
 	return isBlock, isMultiNode
+}
+
+// IsFileRWO checks if it is of type RWO and file mode, if it is return value
+// will be set to true.
+func IsFileRWO(caps []*csi.VolumeCapability) bool {
+	// the return value has been set to true, if the volume is of file mode and if the capabilities are of RWO
+	// kind, ie SINGLE NODE but flexible to have one or more writers. This is also used as a validation in caller
+	// to preserve the backward compatibility we had with file mode RWO volumes.
+
+	// to preserve backward compatibility we allow RWO filemode, ideally SINGLE_NODE_WRITER check is good enough,
+	// however more granular level check could help us in future, so keeping it here as an additional measure.
+	for _, cap := range caps {
+		if cap.AccessMode != nil {
+			if cap.GetMount() != nil {
+				switch cap.AccessMode.Mode { //nolint:exhaustive // only check what we want
+				case csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER,
+					csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER:
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// IsReaderOnly check and set return value true only when the access mode is `READER ONLY` regardless of file
+// or block mode.
+func IsReaderOnly(caps []*csi.VolumeCapability) bool {
+	for _, cap := range caps {
+		if cap.AccessMode != nil {
+			switch cap.AccessMode.Mode { //nolint:exhaustive // only check what we want
+			case csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
+				csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY:
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// IsBlockMultiWriter validates the volume capability slice against the access modes and access type.
+// if the capability is of multi write the first return value will be set to true and if the request
+// is of type block, the second return value will be set to true.
+func IsBlockMultiWriter(caps []*csi.VolumeCapability) (bool, bool) {
+	// multiWriter has been set and returned after validating multi writer caps regardless of
+	// single or multi node access mode. The caps check is agnostic to whether it is a filesystem or block
+	// mode volume.
+	var multiWriter bool
+
+	// block has been set and returned if the passed in capability is of block volume mode.
+	var block bool
+
+	for _, cap := range caps {
+		if cap.AccessMode != nil {
+			switch cap.AccessMode.Mode { //nolint:exhaustive // only check what we want
+			case csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+				csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER:
+				multiWriter = true
+			}
+		}
+		if cap.GetBlock() != nil {
+			block = true
+		}
+	}
+
+	return multiWriter, block
 }
