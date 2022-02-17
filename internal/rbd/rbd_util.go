@@ -223,6 +223,9 @@ var supportedFeatures = map[string]imageFeature{
 		needRbdNbd: true,
 		dependsOn:  []string{librbd.FeatureNameExclusiveLock},
 	},
+	librbd.FeatureNameDeepFlatten: {
+		needRbdNbd: false,
+	},
 }
 
 // GetKrbdSupportedFeatures load the module if needed and return supported
