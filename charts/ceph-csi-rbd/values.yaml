@@ -206,6 +206,9 @@ provisioner:
       pullPolicy: IfNotPresent
     resources: {}
 
+  # set metadata on volume
+  setmetadata: true
+
   attacher:
     name: attacher
     enabled: true
