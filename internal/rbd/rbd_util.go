@@ -223,6 +223,9 @@ var supportedFeatures = map[string]imageFeature{
 		needRbdNbd: true,
 		dependsOn:  []string{librbd.FeatureNameExclusiveLock},
 	},
+	librbd.FeatureNameDeepFlatten: {
+		needRbdNbd: false,
+	},
 }
 
 // GetKrbdSupportedFeatures load the module if needed and return supported
@@ -577,11 +580,10 @@ func (ri *rbdImage) isInUse() (bool, error) {
 	return len(watchers) > defaultWatchers, nil
 }
 
-// checkImageFeatures check presence of imageFeatures parameter. It returns true when
-// there imageFeatures is missing or empty, skips missing parameter for non-static volumes
-// for backward compatibility.
-func checkImageFeatures(imageFeatures string, ok, static bool) bool {
-	return static && (!ok || imageFeatures == "")
+// checkValidImageFeatures check presence of imageFeatures parameter. It returns false when
+// there imageFeatures is present and empty.
+func checkValidImageFeatures(imageFeatures string, ok bool) bool {
+	return !(ok && imageFeatures == "")
 }
 
 // isNotMountPoint checks whether MountPoint does not exists and

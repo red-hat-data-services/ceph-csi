@@ -68,6 +68,18 @@ var fastDiffSupport = []util.KernelVersion{
 	}, // standard 5.3+ versions
 }
 
+// nolint:gomnd // numbers specify Kernel versions.
+var deepFlattenSupport = []util.KernelVersion{
+	{
+		Version:      5,
+		PatchLevel:   1,
+		SubLevel:     0,
+		ExtraVersion: 0,
+		Distribution: "",
+		Backport:     false,
+	}, // standard 5.1+ versions
+}
+
 // To use `io-timeout=0` we need
 // www.mail-archive.com/linux-block@vger.kernel.org/msg38060.html
 // nolint:gomnd // numbers specify Kernel versions.
@@ -143,6 +155,10 @@ func createRBDStorageClass(
 	sc.Parameters["clusterID"] = fsID
 	for k, v := range parameters {
 		sc.Parameters[k] = v
+		// if any values are empty remove it from the map
+		if v == "" {
+			delete(sc.Parameters, k)
+		}
 	}
 	sc.Namespace = cephCSINamespace
 
