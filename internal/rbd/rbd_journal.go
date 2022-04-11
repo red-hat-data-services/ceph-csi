@@ -540,8 +540,10 @@ func RegenerateJournal(
 	claimName,
 	volumeID,
 	requestName,
+	clusterName string,
 	owner string,
-	cr *util.Credentials) (string, error) {
+	cr *util.Credentials,
+) (string, error) {
 	ctx := context.Background()
 	var (
 		vi     util.CSIIdentifier
@@ -553,6 +555,7 @@ func RegenerateJournal(
 
 	rbdVol = &rbdVolume{}
 	rbdVol.VolID = volumeID
+	rbdVol.ClusterName = clusterName
 
 	err = vi.DecomposeCSIID(rbdVol.VolID)
 	if err != nil {
