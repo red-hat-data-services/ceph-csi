@@ -118,6 +118,7 @@ type rbdImage struct {
 	ParentPool string
 	// Cluster name
 	ClusterName string
+
 	// Owner is the creator (tenant, Kubernetes Namespace) of the volume
 	Owner string
 
@@ -1933,6 +1934,10 @@ func genVolFromVolIDWithMigration(
 
 // setVolumeMetadata set PV/PVC/PVCNamespace metadata on RBD image.
 func (rv *rbdVolume) setVolumeMetadata(parameters map[string]string) error {
+        if !rv.EnableMetadata {
+                return nil
+        }
+
 	for k, v := range k8s.GetVolumeMetadata(parameters) {
 		err := rv.SetMetadata(k, v)
 		if err != nil {
@@ -1954,6 +1959,10 @@ func (rv *rbdVolume) setVolumeMetadata(parameters map[string]string) error {
 // setSnapshotMetadata Set snapshot-name/snapshot-namespace/snapshotcontent-name metadata
 // on RBD image.
 func (rv *rbdVolume) setSnapshotMetadata(parameters map[string]string) error {
+        if !rv.EnableMetadata {
+                return nil
+        }
+
 	for k, v := range k8s.GetSnapshotMetadata(parameters) {
 		err := rv.SetMetadata(k, v)
 		if err != nil {

@@ -542,6 +542,7 @@ func RegenerateJournal(
 	requestName,
 	clusterName string,
 	owner string,
+	setMetadata bool,
 	cr *util.Credentials,
 ) (string, error) {
 	ctx := context.Background()
@@ -556,6 +557,7 @@ func RegenerateJournal(
 	rbdVol = &rbdVolume{}
 	rbdVol.VolID = volumeID
 	rbdVol.ClusterName = clusterName
+	rbdVol.EnableMetadata = setMetadata
 
 	err = vi.DecomposeCSIID(rbdVol.VolID)
 	if err != nil {
