@@ -1958,5 +1958,11 @@ func (rv *rbdVolume) setSnapshotMetadata(parameters map[string]string) error {
 		}
 	}
 
+	err := rv.RemoveMetadata(clusterNameKey)
+	// TODO: replace string comparison with errno.
+	if err != nil && !strings.Contains(err.Error(), "No such file or directory") {
+		return fmt.Errorf("failed to unset metadata key %q on %q: %w", clusterNameKey, rv, err)
+	}
+
 	return nil
 }
