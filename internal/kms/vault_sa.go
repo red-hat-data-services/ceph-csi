@@ -341,7 +341,7 @@ func (kms *VaultTenantSA) getTokenPath() (string, error) {
 // automatically created. Hence, use the create token api to fetch it.
 // refer: https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.24.md \
 // #no-really-you-must-read-this-before-you-upgrade-1 .
-func (kms *vaultTenantSA) createToken(sa *corev1.ServiceAccount, client *kubernetes.Clientset) (string, error) {
+func (kms *VaultTenantSA) createToken(sa *corev1.ServiceAccount, client *kubernetes.Clientset) (string, error) {
 	major, minor, err := k8s.GetServerVersion(client)
 	if err != nil {
 		return "", fmt.Errorf("failed to get server version: %w", err)
