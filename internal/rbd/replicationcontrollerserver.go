@@ -580,7 +580,12 @@ func (rs *ReplicationServer) PromoteVolume(ctx context.Context,
 		}
 	}
 
-	err = checkHealthyPrimary(ctx, rbdVol)
+	mirrorStatus, err := rbdVol.getImageMirroringStatus()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	err = checkHealthyPrimary(ctx, rbdVol, mirrorStatus)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -615,14 +620,9 @@ func (rs *ReplicationServer) PromoteVolume(ctx context.Context,
 }
 
 // checkHealthyPrimary checks if the image is a healhty primary or not.
-// healthy primary image will be in up+stopped state in local cluster and
-// up+replaying in the remote clusters, for states other than this it returns
-// an error message.
-func checkHealthyPrimary(ctx context.Context, rbdVol *rbdVolume) error {
-	mirrorStatus, err := rbdVol.getImageMirroringStatus()
-	if err != nil {
-		return err
-	}
+// healthy primary image will be in up+stopped state, for states other
+// than this it returns an error message.
+func checkHealthyPrimary(ctx context.Context, rbdVol *rbdVolume, mirrorStatus *librbd.GlobalMirrorImageStatus) error {
 	localStatus, err := mirrorStatus.LocalStatus()
 	if err != nil {
 		// LocalStatus can fail if the local site status is not found in
@@ -633,32 +633,12 @@ func checkHealthyPrimary(ctx context.Context, rbdVol *rbdVolume) error {
 		return fmt.Errorf("failed to get local status: %w", err)
 	}
 
-	if !localStatus.Up && localStatus.State != librbd.MirrorImageStatusStateStopped {
+	if !localStatus.Up || localStatus.State != librbd.MirrorImageStatusStateStopped {
 		return fmt.Errorf("%s %w. State is up=%t, state=%q",
 			rbdVol,
 			ErrUnHealthyMirroredImage,
 			localStatus.Up,
 			localStatus.State)
-	}
-
-	// Remote image should be in up+replaying state.
-	for _, s := range mirrorStatus.SiteStatuses {
-		log.UsefulLog(
-			ctx,
-			"peer site mirrorUUID=%q, daemon up=%t, mirroring state=%q, description=%q and lastUpdate=%d",
-			s.MirrorUUID,
-			s.Up,
-			s.State,
-			s.Description,
-			s.LastUpdate)
-		if s.MirrorUUID != "" {
-			if !s.Up && s.State != librbd.MirrorImageStatusStateReplaying {
-				return fmt.Errorf("remote image %s is not healthy. State is up=%t, state=%q",
-					rbdVol,
-					s.Up,
-					s.State)
-			}
-		}
 	}
 
 	return nil
@@ -855,18 +835,11 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 		ready = checkRemoteSiteStatus(ctx, mirrorStatus)
 	}
 
-	if resyncRequired(localStatus) {
-		err = rbdVol.resyncImage()
-		if err != nil {
-			log.ErrorLog(ctx, err.Error())
+	err = resyncVolume(localStatus, rbdVol, req.Force)
+	if err != nil {
+		log.ErrorLog(ctx, err.Error())
 
-			return nil, status.Error(codes.Internal, err.Error())
-		}
-
-		// If we issued a resync, return a non-final error as image needs to be recreated
-		// locally. Caller retries till RBD syncs an initial version of the image to
-		// report its status in the resync request.
-		return nil, status.Error(codes.Unavailable, "awaiting initial resync due to split brain")
+		return nil, err
 	}
 
 	err = checkVolumeResyncStatus(localStatus)
@@ -884,6 +857,29 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 	}
 
 	return resp, nil
+}
+
+func resyncVolume(localStatus librbd.SiteMirrorImageStatus, rbdVol *rbdVolume, force bool) error {
+	if resyncRequired(localStatus) {
+		// If the force option is not set return the error message to retry
+		// with Force option.
+		if !force {
+			return status.Errorf(codes.FailedPrecondition,
+				"image is in %q state, description (%s). Force resync to recover volume",
+				localStatus.State, localStatus.Description)
+		}
+		err := rbdVol.resyncImage()
+		if err != nil {
+			return status.Error(codes.Internal, err.Error())
+		}
+
+		// If we issued a resync, return a non-final error as image needs to be recreated
+		// locally. Caller retries till RBD syncs an initial version of the image to
+		// report its status in the resync request.
+		return status.Error(codes.Unavailable, "awaiting initial resync due to split brain")
+	}
+
+	return nil
 }
 
 func checkVolumeResyncStatus(localStatus librbd.SiteMirrorImageStatus) error {
