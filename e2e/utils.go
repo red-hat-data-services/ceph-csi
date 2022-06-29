@@ -62,6 +62,10 @@ const (
 	noError = ""
 	// labels/selector used to list/delete rbd pods.
 	rbdPodLabels = "app in (ceph-csi-rbd, csi-rbdplugin, csi-rbdplugin-provisioner)"
+
+	// cluster Name, set by user.
+	clusterNameKey     = "csi.ceph.com/cluster/name"
+	defaultClusterName = "k8s-cluster-1"
 )
 
 var (

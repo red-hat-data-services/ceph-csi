@@ -151,6 +151,10 @@ spec:
             {{- if .Values.provisioner.profiling.enabled }}
             - "--enableprofiling={{ .Values.provisioner.profiling.enabled }}"
             {{- end }}
+            {{- if .Values.provisioner.clustername }}
+            - "--clustername={{ .Values.provisioner.clustername }}"
+            {{- end }}
+            - "--setmetadata={{ .Values.provisioner.setmetadata }}"
           env:
             - name: POD_IP
               valueFrom:
@@ -198,6 +202,10 @@ spec:
             - "--v={{ .Values.logLevel }}"
             - "--drivername=$(DRIVER_NAME)"
             - "--drivernamespace=$(DRIVER_NAMESPACE)"
+            {{- if .Values.provisioner.clustername }}
+            - "--clustername={{ .Values.provisioner.clustername }}"
+            {{- end }}
+            - "--setmetadata={{ .Values.provisioner.setmetadata }}"
           env:
             - name: DRIVER_NAMESPACE
               valueFrom:

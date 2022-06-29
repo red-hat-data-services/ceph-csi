@@ -79,6 +79,9 @@ const (
 
 	// krbd attribute file to check supported features.
 	krbdSupportedFeaturesFile = "/sys/bus/rbd/supported_features"
+
+	// clusterNameKey cluster Key, set on RBD image.
+	clusterNameKey = "csi.ceph.com/cluster/name"
 )
 
 // rbdImage contains common attributes and methods for the rbdVolume and
@@ -92,11 +95,7 @@ type rbdImage struct {
 	ImageID string
 	// VolID is the volume ID that is exchanged with CSI drivers,
 	// identifying this rbd image
-	VolID string `json:"volID"`
-
-	// VolSize is the size of the RBD image backing this rbdImage.
-	VolSize int64
-
+	VolID    string `json:"volID"`
 	Monitors string
 	// JournalPool is the ceph pool in which the CSI Journal/CSI snapshot Journal is
 	// stored
@@ -113,26 +112,36 @@ type rbdImage struct {
 	// config maps in v1.0.0
 	RequestName string
 	NamePrefix  string
-
 	// ParentName represents the parent image name of the image.
 	ParentName string
 	// Parent Pool is the pool that contains the parent image.
-	ParentPool      string
-	ImageFeatureSet librbd.FeatureSet
-	// Primary represent if the image is primary or not.
-	Primary bool
-
-	// encryption provides access to optional VolumeEncryption functions
-	encryption *util.VolumeEncryption
+	ParentPool string
+	// Cluster name
+	ClusterName string
 	// Owner is the creator (tenant, Kubernetes Namespace) of the volume
 	Owner string
 
-	CreatedAt *timestamp.Timestamp
+	// VolSize is the size of the RBD image backing this rbdImage.
+	VolSize int64
 
+	// image striping configurations.
+	StripeCount uint64
+	StripeUnit  uint64
+	ObjectSize  uint64
+
+	ImageFeatureSet librbd.FeatureSet
+	// encryption provides access to optional VolumeEncryption functions
+	encryption *util.VolumeEncryption
+	CreatedAt  *timestamp.Timestamp
 	// conn is a connection to the Ceph cluster obtained from a ConnPool
 	conn *util.ClusterConnection
 	// an opened IOContext, call .openIoctx() before using
 	ioctx *rados.IOContext
+
+	// Primary represent if the image is primary or not.
+	Primary bool
+	// Set metadata on volume
+	EnableMetadata bool
 }
 
 // rbdVolume represents a CSI volume and its RBD image specifics.
@@ -1931,6 +1940,14 @@ func (rv *rbdVolume) setVolumeMetadata(parameters map[string]string) error {
 		}
 	}
 
+	if rv.ClusterName != "" {
+		err := rv.SetMetadata(clusterNameKey, rv.ClusterName)
+		if err != nil {
+			return fmt.Errorf("failed to set metadata key %q, value %q on image: %w",
+				clusterNameKey, rv.ClusterName, err)
+		}
+	}
+
 	return nil
 }
 
@@ -1942,6 +1959,12 @@ func (rv *rbdVolume) setSnapshotMetadata(parameters map[string]string) error {
 		if err != nil {
 			return fmt.Errorf("failed to set metadata key %q, value %q on image: %w", k, v, err)
 		}
+	}
+
+	err := rv.RemoveMetadata(clusterNameKey)
+	// TODO: replace string comparison with errno.
+	if err != nil && !strings.Contains(err.Error(), "No such file or directory") {
+		return fmt.Errorf("failed to unset metadata key %q on %q: %w", clusterNameKey, rv, err)
 	}
 
 	return nil
