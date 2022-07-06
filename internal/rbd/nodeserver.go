@@ -1103,7 +1103,7 @@ func (ns *NodeServer) NodeGetVolumeStats(
 //
 // TODO: https://github.com/container-storage-interface/spec/issues/371#issuecomment-756834471
 func blockNodeGetVolumeStats(ctx context.Context, targetPath string) (*csi.NodeGetVolumeStatsResponse, error) {
-	args := []string{"--noheadings", "--bytes", "--output=SIZE", targetPath}
+	args := []string{"--noheadings", "--nodeps", "--bytes", "--output=SIZE", targetPath}
 	lsblkSize, _, err := util.ExecCommand(ctx, "/bin/lsblk", args...)
 	if err != nil {
 		err = fmt.Errorf("lsblk %v returned an error: %w", args, err)
