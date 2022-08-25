@@ -165,14 +165,6 @@ func checkValidCreateVolumeRequest(
 				parentVol.Size,
 				vol.Size)
 		}
-	case sID != nil:
-		if vol.Size < parentVol.Size {
-			return fmt.Errorf(
-				"cannot restore from snapshot %s: volume size %d is smaller than source volume size %d",
-				sID.SnapshotID,
-				parentVol.Size,
-				vol.Size)
-		}
 	}
 
 	return nil
