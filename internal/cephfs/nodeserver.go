@@ -491,7 +491,7 @@ func (ns *NodeServer) NodeGetVolumeStats(
 	}
 
 	if stat.Mode().IsDir() {
-		return csicommon.FilesystemNodeGetVolumeStats(ctx, targetPath)
+		return csicommon.FilesystemNodeGetVolumeStats(ctx, targetPath, false)
 	}
 
 	return nil, status.Errorf(codes.InvalidArgument, "targetpath %q is not a directory or device", targetPath)
