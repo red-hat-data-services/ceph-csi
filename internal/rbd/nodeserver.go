@@ -1221,7 +1221,7 @@ func (ns *NodeServer) NodeGetVolumeStats(
 	}
 
 	if stat.Mode().IsDir() {
-		return csicommon.FilesystemNodeGetVolumeStats(ctx, targetPath)
+		return csicommon.FilesystemNodeGetVolumeStats(ctx, targetPath, true)
 	} else if (stat.Mode() & os.ModeDevice) == os.ModeDevice {
 		return blockNodeGetVolumeStats(ctx, targetPath)
 	}
