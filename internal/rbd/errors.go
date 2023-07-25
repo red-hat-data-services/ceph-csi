@@ -44,6 +44,4 @@ var (
 	ErrDecodeClusterIDFromMonsInVolID = errors.New("failed to get clusterID from monitors hash in volID")
 	// ErrUnHealthyMirroredImage is returned when mirrored image is not healthy.
 	ErrUnHealthyMirroredImage = errors.New("mirrored image is not healthy")
-	// ErrImageInUse is returned when the image is in use.
-	ErrImageInUse = errors.New("image is in use")
 )
