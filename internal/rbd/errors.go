@@ -42,6 +42,4 @@ var (
 	ErrMissingImageNameInVolID = errors.New("rbd image name information can not be empty in volID")
 	// ErrDecodeClusterIDFromMonsInVolID is returned when mons hash decoding on migration volID.
 	ErrDecodeClusterIDFromMonsInVolID = errors.New("failed to get clusterID from monitors hash in volID")
-	// ErrImageInUse is returned when the image is in use.
-	ErrImageInUse = errors.New("image is in use")
 )
