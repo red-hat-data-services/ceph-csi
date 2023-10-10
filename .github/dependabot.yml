@@ -13,6 +13,7 @@ updates:
       golang-dependencies:
         patterns:
           - "github.com/golang*"
+          - "golang.org/x/*"
       k8s-dependencies:
         patterns:
           - "k8s.io*"
