@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	kmsapi "github.com/ceph/ceph-csi/internal/kms"
@@ -109,7 +110,7 @@ func (ri *rbdImage) isFileEncrypted() bool {
 }
 
 func IsFileEncrypted(ctx context.Context, volOptions map[string]string) (bool, error) {
-	_, encType, err := ParseEncryptionOpts(ctx, volOptions, util.EncryptionTypeInvalid)
+	_, encType, err := ParseEncryptionOpts(volOptions, util.EncryptionTypeInvalid)
 	if err != nil {
 		return false, err
 	}
@@ -305,8 +306,8 @@ func (rv *rbdVolume) openEncryptedDevice(ctx context.Context, devicePath string)
 	return mapperFilePath, nil
 }
 
-func (ri *rbdImage) initKMS(ctx context.Context, volOptions, credentials map[string]string) error {
-	kmsID, encType, err := ParseEncryptionOpts(ctx, volOptions, rbdDefaultEncryptionType)
+func (ri *rbdImage) initKMS(volOptions, credentials map[string]string) error {
+	kmsID, encType, err := ParseEncryptionOpts(volOptions, rbdDefaultEncryptionType)
 	if err != nil {
 		return err
 	}
@@ -331,7 +332,6 @@ func (ri *rbdImage) initKMS(ctx context.Context, volOptions, credentials map[str
 
 // ParseEncryptionOpts returns kmsID and sets Owner attribute.
 func ParseEncryptionOpts(
-	ctx context.Context,
 	volOptions map[string]string,
 	fallbackEncType util.EncryptionType,
 ) (string, util.EncryptionType, error) {
@@ -341,6 +341,13 @@ func ParseEncryptionOpts(
 		encrypted, kmsID string
 	)
 	encrypted, ok = volOptions["encrypted"]
+	if !ok {
+		return "", util.EncryptionTypeNone, nil
+	}
+	ok, err = strconv.ParseBool(encrypted)
+	if err != nil {
+		return "", util.EncryptionTypeInvalid, err
+	}
 	if !ok {
 		return "", util.EncryptionTypeNone, nil
 	}
