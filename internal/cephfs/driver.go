@@ -25,6 +25,7 @@ import (
 	casceph "github.com/ceph/ceph-csi/internal/csi-addons/cephfs"
 	csiaddons "github.com/ceph/ceph-csi/internal/csi-addons/server"
 	csicommon "github.com/ceph/ceph-csi/internal/csi-common"
+	hc "github.com/ceph/ceph-csi/internal/health-checker"
 	"github.com/ceph/ceph-csi/internal/journal"
 	"github.com/ceph/ceph-csi/internal/util"
 	"github.com/ceph/ceph-csi/internal/util/log"
@@ -82,6 +83,7 @@ func NewNodeServer(
 		VolumeLocks:        util.NewVolumeLocks(),
 		kernelMountOptions: kernelMountOptions,
 		fuseMountOptions:   fuseMountOptions,
+		healthChecker:      hc.NewHealthCheckManager(),
 	}
 }
 
@@ -167,15 +169,10 @@ func (fs *Driver) Run(conf *util.Config) {
 		// passing nil for replication server as cephFS does not support mirroring.
 		RS: nil,
 	}
-	server.Start(conf.Endpoint, conf.HistogramOption, srv, conf.EnableGRPCMetrics)
-	if conf.EnableGRPCMetrics {
-		log.WarningLogMsg("EnableGRPCMetrics is deprecated")
-		go util.StartMetricsServer(conf)
-	}
+	server.Start(conf.Endpoint, srv)
+
 	if conf.EnableProfiling {
-		if !conf.EnableGRPCMetrics {
-			go util.StartMetricsServer(conf)
-		}
+		go util.StartMetricsServer(conf)
 		log.DebugLogMsg("Registering profiling handler")
 		go util.EnableProfiling()
 	}

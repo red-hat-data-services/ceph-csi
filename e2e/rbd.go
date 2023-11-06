@@ -275,21 +275,14 @@ var _ = Describe("RBD", func() {
 		}
 		c = f.ClientSet
 		if deployRBD {
-			err := createNodeLabel(f, nodeRegionLabel, regionValue)
+			err := addLabelsToNodes(f, map[string]string{
+				nodeRegionLabel:          regionValue,
+				nodeZoneLabel:            zoneValue,
+				crushLocationRegionLabel: crushLocationRegionValue,
+				crushLocationZoneLabel:   crushLocationZoneValue,
+			})
 			if err != nil {
-				framework.Failf("failed to create node label: %v", err)
-			}
-			err = createNodeLabel(f, nodeZoneLabel, zoneValue)
-			if err != nil {
-				framework.Failf("failed to create node label: %v", err)
-			}
-			err = createNodeLabel(f, crushLocationRegionLabel, crushLocationRegionValue)
-			if err != nil {
-				framework.Failf("failed to create node label: %v", err)
-			}
-			err = createNodeLabel(f, crushLocationZoneLabel, crushLocationZoneValue)
-			if err != nil {
-				framework.Failf("failed to create node label: %v", err)
+				framework.Failf("failed to add node labels: %v", err)
 			}
 			if cephCSINamespace != defaultNs {
 				err = createNamespace(c, cephCSINamespace)
@@ -408,31 +401,16 @@ var _ = Describe("RBD", func() {
 				}
 			}
 		}
-		err = deleteNodeLabel(c, nodeRegionLabel)
+		err = deleteNodeLabels(c, []string{
+			nodeRegionLabel,
+			nodeZoneLabel,
+			nodeCSIRegionLabel,
+			nodeCSIZoneLabel,
+			crushLocationRegionLabel,
+			crushLocationZoneLabel,
+		})
 		if err != nil {
-			framework.Failf("failed to delete node label: %v", err)
-		}
-		err = deleteNodeLabel(c, nodeZoneLabel)
-		if err != nil {
-			framework.Failf("failed to delete node label: %v", err)
-		}
-		// Remove the CSI labels that get added
-		err = deleteNodeLabel(c, nodeCSIRegionLabel)
-		if err != nil {
-			framework.Failf("failed to delete node label: %v", err)
-		}
-		err = deleteNodeLabel(c, nodeCSIZoneLabel)
-		if err != nil {
-			framework.Failf("failed to delete node label: %v", err)
-		}
-		// Remove the CRUSH Location labels
-		err = deleteNodeLabel(c, crushLocationRegionLabel)
-		if err != nil {
-			framework.Failf("failed to delete node label: %v", err)
-		}
-		err = deleteNodeLabel(c, crushLocationZoneLabel)
-		if err != nil {
-			framework.Failf("failed to delete node label: %v", err)
+			framework.Failf("failed to delete node labels: %v", err)
 		}
 	})
 

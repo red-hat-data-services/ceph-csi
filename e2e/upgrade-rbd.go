@@ -107,14 +107,12 @@ var _ = Describe("RBD Upgrade Testing", func() {
 		if err != nil {
 			framework.Failf("failed to create snapshotclass: %v", err)
 		}
-
-		err = createNodeLabel(f, nodeRegionLabel, regionValue)
+		err = addLabelsToNodes(f, map[string]string{
+			nodeRegionLabel: regionValue,
+			nodeZoneLabel:   zoneValue,
+		})
 		if err != nil {
-			framework.Failf("failed to create node label: %v", err)
-		}
-		err = createNodeLabel(f, nodeZoneLabel, zoneValue)
-		if err != nil {
-			framework.Failf("failed to create node label: %v", err)
+			framework.Failf("failed to add node labels: %v", err)
 		}
 	})
 	AfterEach(func() {
@@ -167,13 +165,12 @@ var _ = Describe("RBD Upgrade Testing", func() {
 				}
 			}
 		}
-		err = deleteNodeLabel(c, nodeRegionLabel)
+		err = deleteNodeLabels(c, []string{
+			nodeRegionLabel,
+			nodeZoneLabel,
+		})
 		if err != nil {
-			framework.Failf("failed to delete node label: %v", err)
-		}
-		err = deleteNodeLabel(c, nodeZoneLabel)
-		if err != nil {
-			framework.Failf("failed to delete node label: %v", err)
+			framework.Failf("failed to delete node labels: %v", err)
 		}
 	})
 
