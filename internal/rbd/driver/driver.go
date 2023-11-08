@@ -105,7 +105,7 @@ func (r *Driver) Run(conf *util.Config) {
 	// Create instances of the volume and snapshot journal
 	rbd.InitJournals(conf.InstanceID)
 
-	// configre CSI-Addons server and components
+	// configure CSI-Addons server and components
 	err = r.setupCSIAddonsServer(conf)
 	if err != nil {
 		log.FatalLogMsg(err.Error())
@@ -175,9 +175,12 @@ func (r *Driver) Run(conf *util.Config) {
 		r.cs = NewControllerServer(r.cd)
 		r.cs.ClusterName = conf.ClusterName
 		r.cs.SetMetadata = conf.SetMetadata
-		log.WarningLogMsg("replication service running on controller server is deprecated " +
-			"and replaced by CSI-Addons, see https://github.com/ceph/ceph-csi/issues/3314 for more details")
-		r.rs = NewReplicationServer(r.cs)
+	}
+
+	// configure CSI-Addons server and components
+	err = r.setupCSIAddonsServer(conf)
+	if err != nil {
+		log.FatalLogMsg(err.Error())
 	}
 
 	s := csicommon.NewNonBlockingGRPCServer()
