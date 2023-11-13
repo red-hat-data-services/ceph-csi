@@ -4,6 +4,9 @@
 
 - Removed the deprecated grpc metrics flag's in [PR](https://github.com/ceph/ceph-csi/pull/4225)
 
+- Support for pre-creation of cephFS subvolumegroup before creating subvolume
+  is removed in [PR](https://github.com/ceph/ceph-csi/pull/4195)
+
 ## Features
 
 RBD
