@@ -44,6 +44,7 @@ var (
 	cephFSExamplePath     = examplePath + "cephfs/"
 	subvolumegroup        = "e2e"
 	fileSystemName        = "myfs"
+	fileSystemPoolName    = "myfs-replicated"
 )
 
 func deployCephfsPlugin() {
@@ -1553,6 +1554,7 @@ var _ = Describe(cephfsType, func() {
 						scOpts := map[string]string{
 							"encrypted":       "true",
 							"encryptionKMSID": kmsID,
+							"pool":            fileSystemPoolName,
 						}
 
 						err = createCephfsStorageClass(f.ClientSet, f, true, scOpts)
