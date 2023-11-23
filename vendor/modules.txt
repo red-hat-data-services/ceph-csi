@@ -138,8 +138,9 @@ github.com/ceph/ceph-csi/api/deploy/kubernetes/cephfs
 github.com/ceph/ceph-csi/api/deploy/kubernetes/nfs
 github.com/ceph/ceph-csi/api/deploy/kubernetes/rbd
 github.com/ceph/ceph-csi/api/deploy/ocp
-# github.com/ceph/go-ceph v0.24.0
+# github.com/ceph/go-ceph v0.24.1-0.20231116190858-df112a417d31
 ## explicit; go 1.19
+github.com/ceph/go-ceph/cephfs
 github.com/ceph/go-ceph/cephfs/admin
 github.com/ceph/go-ceph/common/admin/manager
 github.com/ceph/go-ceph/common/admin/nfs
@@ -208,7 +209,7 @@ github.com/gemalto/kmip-go/ttlv
 # github.com/ghodss/yaml v1.0.1-0.20190212211648-25d852aebe32
 ## explicit
 github.com/ghodss/yaml
-# github.com/go-jose/go-jose/v3 v3.0.0
+# github.com/go-jose/go-jose/v3 v3.0.1
 ## explicit; go 1.12
 github.com/go-jose/go-jose/v3
 github.com/go-jose/go-jose/v3/cipher

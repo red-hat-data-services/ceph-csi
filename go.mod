@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go v1.48.0
 	github.com/aws/aws-sdk-go-v2/service/sts v1.25.3
 	github.com/ceph/ceph-csi/api v0.0.0-00010101000000-000000000000
-	github.com/ceph/go-ceph v0.24.0
+	github.com/ceph/go-ceph v0.24.1-0.20231116190858-df112a417d31
 	github.com/container-storage-interface/spec v1.9.0
 	github.com/csi-addons/spec v0.2.1-0.20230606140122-d20966d2e444
 	github.com/gemalto/kmip-go v0.0.10
@@ -73,7 +73,7 @@ require (
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/gemalto/flume v0.13.0 // indirect
 	github.com/ghodss/yaml v1.0.1-0.20190212211648-25d852aebe32 // indirect
-	github.com/go-jose/go-jose/v3 v3.0.0 // indirect
+	github.com/go-jose/go-jose/v3 v3.0.1 // indirect
 	github.com/go-logr/logr v1.3.0 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.19.6 // indirect
