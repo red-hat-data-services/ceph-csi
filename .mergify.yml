@@ -16,13 +16,37 @@ defaults:
       # Use ceph-csi-bot for rebasing, not the account of the PR owner.
       # bot_account: ceph-csi-bot
 
+      # by default Mergify requires manual merging of PRs that modify its own
+      # configuration (this file), allowing this makes it easier to prepare for
+      # releases (new branches added here)
+      allow_merging_configuration_change: true
+
 queue_rules:
   - name: default
     conditions:
       # Conditions to get out of the queue (= merged)
       - or:
           - and:
-              - base=release-v*
+              - base~=^(release-.+)$
+              - "status-success=codespell"
+              - "status-success=multi-arch-build"
+              - "status-success=go-test"
+              - "status-success=golangci-lint"
+              - "status-success=mod-check"
+              - "status-success=lint-extras"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.26"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.27"
+              - "status-success=ci/centos/k8s-e2e-external-storage/1.28"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.26"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.27"
+              - "status-success=ci/centos/mini-e2e-helm/k8s-1.28"
+              - "status-success=ci/centos/mini-e2e/k8s-1.26"
+              - "status-success=ci/centos/mini-e2e/k8s-1.27"
+              - "status-success=ci/centos/mini-e2e/k8s-1.28"
+              - "status-success=ci/centos/upgrade-tests-cephfs"
+              - "status-success=ci/centos/upgrade-tests-rbd"
+          - and:
+              - base=release-v3.9
               - "status-success=codespell"
               - "status-success=multi-arch-build"
               - "status-success=go-test"
@@ -105,7 +129,7 @@ pull_request_rules:
           - and:
               - author=dependabot[bot]
               - label!=DNM
-              - base=release-v*
+              - base~=^(release-.+)$
               - "#approved-reviews-by>=2"
               - "#changes-requested-reviews-by=0"
               - "approved-reviews-by=@ceph/ceph-csi-contributors"
@@ -171,7 +195,7 @@ pull_request_rules:
       - or:
           - and:
               - label!=DNM
-              - base=release-v*
+              - base~=^(release-.+)$
               - "#approved-reviews-by>=2"
               - "#changes-requested-reviews-by=0"
               - "approved-reviews-by=@ceph/ceph-csi-contributors"
@@ -230,7 +254,7 @@ pull_request_rules:
     conditions:
       - or:
           - and:
-              - base=release-v*
+              - base~=^(release-.+)$
               - label!=DNM
               - label=ready-to-merge
               - "approved-reviews-by=@ceph/ceph-csi-maintainers"
@@ -284,15 +308,6 @@ pull_request_rules:
         name: default
       delete_head_branch: {}
 
-  - name: backport patches to release-v3.8 branch
-    conditions:
-      - base=devel
-      - label=backport-to-release-v3.8
-    actions:
-      backport:
-        branches:
-          - release-v3.8
-
   - name: backport patches to release-v3.9 branch
     conditions:
       - base=devel
@@ -301,6 +316,15 @@ pull_request_rules:
       backport:
         branches:
           - release-v3.9
+
+  - name: backport patches to release-v3.10 branch
+    conditions:
+      - base=devel
+      - label=backport-to-release-v3.10
+    actions:
+      backport:
+        branches:
+          - release-v3.10
 
   - name: remove outdated approvals on ci/centos
     conditions:
