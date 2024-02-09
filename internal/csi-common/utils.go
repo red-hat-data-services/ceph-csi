@@ -95,6 +95,18 @@ func NewControllerServiceCapability(ctrlCap csi.ControllerServiceCapability_RPC_
 	}
 }
 
+// NewGroupControllerServiceCapability returns group controller capabilities.
+func NewGroupControllerServiceCapability(ctrlCap csi.GroupControllerServiceCapability_RPC_Type,
+) *csi.GroupControllerServiceCapability {
+	return &csi.GroupControllerServiceCapability{
+		Type: &csi.GroupControllerServiceCapability_Rpc{
+			Rpc: &csi.GroupControllerServiceCapability_RPC{
+				Type: ctrlCap,
+			},
+		},
+	}
+}
+
 // NewMiddlewareServerOption creates a new grpc.ServerOption that configures a
 // common format for log messages and other gRPC related handlers.
 func NewMiddlewareServerOption() grpc.ServerOption {
@@ -133,6 +145,13 @@ func getReqID(req interface{}) string {
 
 	case *csi.NodeExpandVolumeRequest:
 		reqID = r.VolumeId
+
+	case *csi.CreateVolumeGroupSnapshotRequest:
+		reqID = r.Name
+	case *csi.DeleteVolumeGroupSnapshotRequest:
+		reqID = r.GroupSnapshotId
+	case *csi.GetVolumeGroupSnapshotRequest:
+		reqID = r.GroupSnapshotId
 	}
 
 	return reqID
