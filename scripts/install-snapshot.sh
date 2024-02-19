@@ -7,6 +7,9 @@ SCRIPT_DIR="$(dirname "${0}")"
 # shellcheck source=build.env
 source "${SCRIPT_DIR}/../build.env"
 
+# shellcheck disable=SC1091
+[ ! -e "${SCRIPT_DIR}"/utils.sh ] || source "${SCRIPT_DIR}"/utils.sh
+
 SNAPSHOT_VERSION=${SNAPSHOT_VERSION:-"v5.0.1"}
 
 TEMP_DIR="$(mktemp -d)"
@@ -21,6 +24,11 @@ SNAPSHOTCLASS="${SNAPSHOTTER_URL}/client/config/crd/snapshot.storage.k8s.io_volu
 VOLUME_SNAPSHOT_CONTENT="${SNAPSHOTTER_URL}/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml"
 VOLUME_SNAPSHOT="${SNAPSHOTTER_URL}/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml"
 
+# volumegroupsnapshot CRD
+VOLUME_GROUP_SNAPSHOTCLASS="${SNAPSHOTTER_URL}/client/config/crd/groupsnapshot.storage.k8s.io_volumegroupsnapshotclasses.yaml"
+VOLUME_GROUP_SNAPSHOT_CONTENT="${SNAPSHOTTER_URL}/client/config/crd/groupsnapshot.storage.k8s.io_volumegroupsnapshotcontents.yaml"
+VOLUME_GROUP_SNAPSHOT="${SNAPSHOTTER_URL}/client/config/crd/groupsnapshot.storage.k8s.io_volumegroupsnapshots.yaml"
+
 function install_snapshot_controller() {
     local namespace=$1
     if [ -z "${namespace}" ]; then
@@ -29,19 +37,19 @@ function install_snapshot_controller() {
 
     create_or_delete_resource "create" "${namespace}"
 
-    pod_ready=$(kubectl get pods -l app=snapshot-controller -n "${namespace}" -o jsonpath='{.items[0].status.containerStatuses[0].ready}')
+    pod_ready=$(kubectl_retry get pods -l app.kubernetes.io/name=snapshot-controller -n "${namespace}" -o jsonpath='{.items[0].status.containerStatuses[0].ready}')
     INC=0
     until [[ "${pod_ready}" == "true" || $INC -gt 20 ]]; do
         sleep 10
         ((++INC))
-        pod_ready=$(kubectl get pods -l app=snapshot-controller -n "${namespace}" -o jsonpath='{.items[0].status.containerStatuses[0].ready}')
+        pod_ready=$(kubectl_retry get pods -l app.kubernetes.io/name=snapshot-controller -n "${namespace}" -o jsonpath='{.items[0].status.containerStatuses[0].ready}')
         echo "snapshotter pod status: ${pod_ready}"
     done
 
     if [ "${pod_ready}" != "true" ]; then
         echo "snapshotter controller creation failed"
-        kubectl get pods -l app=snapshot-controller -n "${namespace}"
-        kubectl describe po -l app=snapshot-controller -n "${namespace}"
+        kubectl_retry get pods -l app.kubernetes.io/name=snapshot-controller -n "${namespace}"
+        kubectl_retry describe po -l app.kubernetes.io/name=snapshot-controller -n "${namespace}"
         exit 1
     fi
 
@@ -66,19 +74,31 @@ function create_or_delete_resource() {
     curl -o "${temp_snap_controller}" "${SNAPSHOT_CONTROLLER}"
     sed -i "s/namespace: kube-system/namespace: ${namespace}/g" "${temp_rbac}"
     sed -i "s/namespace: kube-system/namespace: ${namespace}/g" "${temp_snap_controller}"
-    sed -i "s/canary/${SNAPSHOT_VERSION}/g" "${temp_snap_controller}"
+    sed -i -E "s/(image: registry\.k8s\.io\/sig-storage\/snapshot-controller:).*$/\1$SNAPSHOT_VERSION/g" "${temp_snap_controller}"
 
-    kubectl "${operation}" -f "${temp_rbac}"
-    kubectl "${operation}" -f "${temp_snap_controller}" -n "${namespace}"
-    kubectl "${operation}" -f "${SNAPSHOTCLASS}"
-    kubectl "${operation}" -f "${VOLUME_SNAPSHOT_CONTENT}"
-    kubectl "${operation}" -f "${VOLUME_SNAPSHOT}"
-}
+    if [ "${operation}" == "create" ]; then
+        # Argument to add/update
+        ARGUMENT="--enable-volume-group-snapshots=true"
+        # Check if the argument is already present and set to false
+        if grep -q -E "^\s+-\s+--enable-volume-group-snapshots=false" "${temp_snap_controller}"; then
+            sed -i -E "s/^\s+-\s+--enable-volume-group-snapshots=false$/      - $ARGUMENT/" "${temp_snap_controller}"
+            # Check if the argument is already present and set to true
+        elif grep -q -E "^\s+-\s+--enable-volume-group-snapshots=true" "${temp_snap_controller}"; then
+            echo "Argument already present and matching."
+        else
+            # Add the argument if it's not present
+            sed -i -E "/^(\s+)args:/a\           \ - $ARGUMENT" "${temp_snap_controller}"
+        fi
+    fi
 
-function delete_snapshot_crd() {
-    kubectl delete -f "${SNAPSHOTCLASS}" --ignore-not-found
-    kubectl delete -f "${VOLUME_SNAPSHOT_CONTENT}" --ignore-not-found
-    kubectl delete -f "${VOLUME_SNAPSHOT}" --ignore-not-found
+    kubectl_retry "${operation}" -f "${VOLUME_GROUP_SNAPSHOTCLASS}"
+    kubectl_retry "${operation}" -f "${VOLUME_GROUP_SNAPSHOT_CONTENT}"
+    kubectl_retry "${operation}" -f "${VOLUME_GROUP_SNAPSHOT}"
+    kubectl_retry "${operation}" -f "${temp_rbac}"
+    kubectl_retry "${operation}" -f "${temp_snap_controller}" -n "${namespace}"
+    kubectl_retry "${operation}" -f "${SNAPSHOTCLASS}"
+    kubectl_retry "${operation}" -f "${VOLUME_SNAPSHOT_CONTENT}"
+    kubectl_retry "${operation}" -f "${VOLUME_SNAPSHOT}"
 }
 
 case "${1:-}" in
