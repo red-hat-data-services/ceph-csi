@@ -26,7 +26,7 @@ require (
 	github.com/onsi/gomega v1.31.1
 	github.com/pkg/xattr v0.4.9
 	github.com/prometheus/client_golang v1.18.0
-	github.com/stretchr/testify v1.8.4
+	github.com/stretchr/testify v1.9.0
 	golang.org/x/crypto v0.21.0
 	golang.org/x/net v0.22.0
 	golang.org/x/sys v0.18.0
@@ -42,7 +42,7 @@ require (
 	k8s.io/klog/v2 v2.120.1
 	k8s.io/kubernetes v1.29.2
 	k8s.io/mount-utils v0.29.2
-	k8s.io/pod-security-admission v0.0.0
+	k8s.io/pod-security-admission v0.29.2
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b
 	sigs.k8s.io/controller-runtime v0.17.2
 )
