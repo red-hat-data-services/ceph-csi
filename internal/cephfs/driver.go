@@ -67,6 +67,7 @@ func NewControllerServer(d *csicommon.CSIDriver) *ControllerServer {
 		DefaultControllerServer: csicommon.NewDefaultControllerServer(d),
 		VolumeLocks:             util.NewVolumeLocks(),
 		SnapshotLocks:           util.NewVolumeLocks(),
+		VolumeGroupLocks:        util.NewVolumeLocks(),
 		OperationLocks:          util.NewOperationLock(),
 	}
 }
@@ -124,6 +125,10 @@ func (fs *Driver) Run(conf *util.Config) {
 	store.VolJournal = journal.NewCSIVolumeJournalWithNamespace(CSIInstanceID, fsutil.RadosNamespace)
 
 	store.SnapJournal = journal.NewCSISnapshotJournalWithNamespace(CSIInstanceID, fsutil.RadosNamespace)
+
+	store.VolumeGroupJournal = journal.NewCSIVolumeGroupJournalWithNamespace(
+		CSIInstanceID,
+		fsutil.RadosNamespace)
 	// Initialize default library driver
 
 	fs.cd = csicommon.NewCSIDriver(conf.DriverName, util.DriverVersion, conf.NodeID)
@@ -145,6 +150,10 @@ func (fs *Driver) Run(conf *util.Config) {
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER,
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER,
+		})
+
+		fs.cd.AddGroupControllerServiceCapabilities([]csi.GroupControllerServiceCapability_RPC_Type{
+			csi.GroupControllerServiceCapability_RPC_CREATE_DELETE_GET_VOLUME_GROUP_SNAPSHOT,
 		})
 	}
 	// Create gRPC servers
@@ -192,6 +201,7 @@ func (fs *Driver) Run(conf *util.Config) {
 		IS: fs.is,
 		CS: fs.cs,
 		NS: fs.ns,
+		GS: fs.cs,
 	}
 	server.Start(conf.Endpoint, srv)
 
