@@ -58,6 +58,11 @@ var policyV2Support = []util.KernelVersion{
 	},
 }
 
+// error values
+var (
+	ErrBadAuth = errors.New("key authentication check failed")
+)
+
 func AppendEncyptedSubdirectory(dir string) string {
 	return path.Join(dir, FscryptSubdir)
 }
@@ -71,14 +76,14 @@ func getPassphrase(ctx context.Context, encryption util.VolumeEncryption, volID 
 
 	switch encryption.KMS.RequiresDEKStore() {
 	case kms.DEKStoreIntegrated:
-		passphrase, err = encryption.GetCryptoPassphrase(volID)
+		passphrase, err = encryption.GetCryptoPassphrase(ctx, volID)
 		if err != nil {
 			log.ErrorLog(ctx, "fscrypt: failed to get passphrase from KMS: %v", err)
 
 			return "", err
 		}
 	case kms.DEKStoreMetadata:
-		passphrase, err = encryption.KMS.GetSecret(volID)
+		passphrase, err = encryption.KMS.GetSecret(ctx, volID)
 		if err != nil {
 			log.ErrorLog(ctx, "fscrypt: failed to GetSecret: %v", err)
 
@@ -90,19 +95,27 @@ func getPassphrase(ctx context.Context, encryption util.VolumeEncryption, volID 
 }
 
 // createKeyFuncFromVolumeEncryption returns an fscrypt key function returning
-// encryption keys form a VolumeEncryption struct.
+// encryption keys from a VolumeEncryption struct.
 func createKeyFuncFromVolumeEncryption(
 	ctx context.Context,
 	encryption util.VolumeEncryption,
 	volID string,
+	keySize int,
 ) (func(fscryptactions.ProtectorInfo, bool) (*fscryptcrypto.Key, error), error) {
 	keyFunc := func(info fscryptactions.ProtectorInfo, retry bool) (*fscryptcrypto.Key, error) {
+		if retry {
+			return nil, ErrBadAuth
+		}
+
 		passphrase, err := getPassphrase(ctx, encryption, volID)
 		if err != nil {
 			return nil, err
 		}
 
-		key, err := fscryptcrypto.NewBlankKey(encryptionPassphraseSize / 2)
+		if keySize < 0 {
+			keySize = len(passphrase)
+		}
+		key, err := fscryptcrypto.NewBlankKey(keySize)
 		copy(key.Data(), passphrase)
 
 		return key, err
@@ -130,6 +143,8 @@ func unlockExisting(
 	ctx context.Context,
 	fscryptContext *fscryptactions.Context,
 	encryptedPath string, protectorName string,
+	volEncryption *util.VolumeEncryption,
+	volID string,
 	keyFn func(fscryptactions.ProtectorInfo, bool) (*fscryptcrypto.Key, error),
 ) error {
 	var err error
@@ -152,9 +167,22 @@ func unlockExisting(
 	}
 
 	if err = policy.Unlock(optionFn, keyFn); err != nil {
-		log.ErrorLog(ctx, "fscrypt: unlock with protector error: %v", err)
+		// try backward compat using the old style null padded passphrase
+		errMsg := fmt.Sprintf("fscrypt: unlock with protector error: %v", err)
+		log.ErrorLog(ctx, "%s, retry using a null padded passphrase", errMsg)
 
-		return err
+		keyFn, err = createKeyFuncFromVolumeEncryption(ctx, *volEncryption, volID, encryptionPassphraseSize/2)
+		if err != nil {
+			log.ErrorLog(ctx, "fscrypt: could not create key function: %v", err)
+
+			return err
+		}
+
+		if err = policy.Unlock(optionFn, keyFn); err != nil {
+			log.ErrorLog(ctx, errMsg)
+
+			return err
+		}
 	}
 
 	defer func() {
@@ -346,7 +374,7 @@ func Unlock(
 	stagingTargetPath string, volID string,
 ) error {
 	// Fetches keys from KMS. Do this first to catch KMS errors before setting up anything.
-	keyFn, err := createKeyFuncFromVolumeEncryption(ctx, *volEncryption, volID)
+	keyFn, err := createKeyFuncFromVolumeEncryption(ctx, *volEncryption, volID, -1)
 	if err != nil {
 		log.ErrorLog(ctx, "fscrypt: could not create key function: %v", err)
 
@@ -375,7 +403,7 @@ func Unlock(
 		return err
 	}
 
-	// A proper set up fscrypy directory requires metadata and a kernel policy:
+	// A proper set up fscrypt directory requires metadata and a kernel policy:
 
 	// 1. Do we have a metadata directory (.fscrypt) set up?
 	metadataDirExists := false
@@ -419,13 +447,13 @@ func Unlock(
 	if kernelPolicyExists && metadataDirExists {
 		log.DebugLog(ctx, "fscrypt: Encrypted directory already set up, policy exists")
 
-		return unlockExisting(ctx, fscryptContext, encryptedPath, protectorName, keyFn)
+		return unlockExisting(ctx, fscryptContext, encryptedPath, protectorName, volEncryption, volID, keyFn)
 	}
 
 	if !kernelPolicyExists && !metadataDirExists {
 		log.DebugLog(ctx, "fscrypt: Creating new protector and policy")
 		if volEncryption.KMS.RequiresDEKStore() == kms.DEKStoreIntegrated {
-			if err := volEncryption.StoreNewCryptoPassphrase(volID, encryptionPassphraseSize); err != nil {
+			if err := volEncryption.StoreNewCryptoPassphrase(ctx, volID, encryptionPassphraseSize); err != nil {
 				log.ErrorLog(ctx, "fscrypt: store new crypto passphrase failed: %v", err)
 
 				return err

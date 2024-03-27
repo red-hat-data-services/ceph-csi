@@ -56,6 +56,10 @@ type ControllerServer struct {
 	// A map storing all volumes/snapshots with ongoing operations.
 	OperationLocks *util.OperationLock
 
+	// A map storing all volumes with ongoing operations so that additional operations
+	// for that same volume (as defined by volumegroup ID/volumegroup name) return an Aborted error
+	VolumeGroupLocks *util.VolumeLocks
+
 	// Cluster name
 	ClusterName string
 
@@ -77,7 +81,7 @@ func (cs *ControllerServer) createBackingVolume(
 		&volOptions.SubVolume, volOptions.ClusterID, cs.ClusterName, cs.SetMetadata)
 
 	if sID != nil {
-		err = parentVolOpt.CopyEncryptionConfig(volOptions, sID.SnapshotID, vID.VolumeID)
+		err = parentVolOpt.CopyEncryptionConfig(ctx, volOptions, sID.SnapshotID, vID.VolumeID)
 		if err != nil {
 			return status.Error(codes.Internal, err.Error())
 		}
@@ -86,7 +90,7 @@ func (cs *ControllerServer) createBackingVolume(
 	}
 
 	if parentVolOpt != nil {
-		err = parentVolOpt.CopyEncryptionConfig(volOptions, pvID.VolumeID, vID.VolumeID)
+		err = parentVolOpt.CopyEncryptionConfig(ctx, volOptions, pvID.VolumeID, vID.VolumeID)
 		if err != nil {
 			return status.Error(codes.Internal, err.Error())
 		}
@@ -596,7 +600,7 @@ func (cs *ControllerServer) cleanUpBackingVolume(
 		// GetSecret enabled KMS the DEKs are stored by
 		// fscrypt on the volume that is going to be deleted anyway.
 		log.DebugLog(ctx, "going to remove DEK for integrated store %q (fscrypt)", volOptions.Encryption.GetID())
-		if err := volOptions.Encryption.RemoveDEK(volID.VolumeID); err != nil {
+		if err := volOptions.Encryption.RemoveDEK(ctx, volID.VolumeID); err != nil {
 			log.WarningLog(ctx, "failed to clean the passphrase for volume %q (file encryption): %s",
 				volOptions.VolID, err)
 		}
@@ -907,7 +911,7 @@ func (cs *ControllerServer) CreateSnapshot(
 	// Use same encryption KMS than source volume and copy the passphrase. The passphrase becomes
 	// available under the snapshot id for CreateVolume to use this snap as a backing volume
 	snapVolOptions := store.VolumeOptions{}
-	err = parentVolOptions.CopyEncryptionConfig(&snapVolOptions, sourceVolID, sID.SnapshotID)
+	err = parentVolOptions.CopyEncryptionConfig(ctx, &snapVolOptions, sourceVolID, sID.SnapshotID)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

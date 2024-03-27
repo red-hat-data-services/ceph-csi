@@ -47,7 +47,8 @@ endif
 GO_PROJECT=github.com/ceph/ceph-csi
 
 CEPH_VERSION ?= $(shell . $(CURDIR)/build.env ; echo $${CEPH_VERSION})
-GO_TAGS_LIST ?= $(CEPH_VERSION)
+# TODO: ceph_preview tag required for FSQuiesce API
+GO_TAGS_LIST ?= $(CEPH_VERSION) ceph_preview
 
 # go build flags
 LDFLAGS ?=
@@ -165,6 +166,10 @@ cephcsi: check-env
 
 e2e.test: check-env
 	go test $(GO_TAGS) -mod=vendor -c ./e2e
+
+.PHONY: rbd-group-snapshot
+rbd-group-snapshot:
+	go build -o _output/rbd-group-snapshot ./tools/rbd-group-snapshot
 
 #
 # Update the generated deploy/ files when the template changed. This requires
