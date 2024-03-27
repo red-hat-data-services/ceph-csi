@@ -209,10 +209,32 @@ func fmtBackingSnapshotOptionMismatch(optName, expected, actual string) error {
 		optName, actual, expected)
 }
 
+// getVolumeOptions validates the basic required basic options provided in the
+// volume parameters and extract the volumeOptions from volume parameters.
+// It contains the following checks:
+// - clusterID must be set
+// - monitors must be set
+// - fsName must be set.
+func getVolumeOptions(vo map[string]string) (*VolumeOptions, error) {
+	opts := VolumeOptions{}
+	clusterData, err := GetClusterInformation(vo)
+	if err != nil {
+		return nil, err
+	}
+
+	opts.ClusterID = clusterData.ClusterID
+	opts.Monitors = strings.Join(clusterData.Monitors, ",")
+	opts.SubvolumeGroup = clusterData.CephFS.SubvolumeGroup
+
+	if err = extractOption(&opts.FsName, "fsName", vo); err != nil {
+		return nil, err
+	}
+
+	return &opts, nil
+}
+
 // NewVolumeOptions generates a new instance of volumeOptions from the provided
 // CSI request parameters.
-//
-//nolint:gocyclo,cyclop // TODO: reduce complexity
 func NewVolumeOptions(
 	ctx context.Context,
 	requestName,
@@ -222,20 +244,17 @@ func NewVolumeOptions(
 	cr *util.Credentials,
 ) (*VolumeOptions, error) {
 	var (
-		opts                VolumeOptions
+		opts                *VolumeOptions
 		backingSnapshotBool string
 		err                 error
 	)
 
 	volOptions := req.GetParameters()
-	clusterData, err := GetClusterInformation(volOptions)
+	opts, err = getVolumeOptions(volOptions)
 	if err != nil {
 		return nil, err
 	}
 
-	opts.ClusterID = clusterData.ClusterID
-	opts.Monitors = strings.Join(clusterData.Monitors, ",")
-	opts.SubvolumeGroup = clusterData.CephFS.SubvolumeGroup
 	opts.Owner = k8s.GetOwner(volOptions)
 	opts.BackingSnapshot = IsShallowVolumeSupported(req)
 
@@ -244,10 +263,6 @@ func NewVolumeOptions(
 	}
 
 	if err = extractMounter(&opts.Mounter, volOptions); err != nil {
-		return nil, err
-	}
-
-	if err = extractOption(&opts.FsName, "fsName", volOptions); err != nil {
 		return nil, err
 	}
 
@@ -323,7 +338,7 @@ func NewVolumeOptions(
 		}
 	}
 
-	return &opts, nil
+	return opts, nil
 }
 
 // IsShallowVolumeSupported returns true only for ReadOnly volume requests
@@ -901,7 +916,7 @@ func IsEncrypted(ctx context.Context, volOptions map[string]string) (bool, error
 
 // CopyEncryptionConfig copies passphrases and initializes a fresh
 // Encryption struct if necessary from (vo, vID) to (cp, cpVID).
-func (vo *VolumeOptions) CopyEncryptionConfig(cp *VolumeOptions, vID, cpVID string) error {
+func (vo *VolumeOptions) CopyEncryptionConfig(ctx context.Context, cp *VolumeOptions, vID, cpVID string) error {
 	var err error
 
 	if !vo.IsEncrypted() {
@@ -916,7 +931,7 @@ func (vo *VolumeOptions) CopyEncryptionConfig(cp *VolumeOptions, vID, cpVID stri
 	if cp.Encryption == nil {
 		cp.Encryption, err = util.NewVolumeEncryption(vo.Encryption.GetID(), vo.Encryption.KMS)
 		if errors.Is(err, util.ErrDEKStoreNeeded) {
-			_, err := vo.Encryption.KMS.GetSecret("")
+			_, err := vo.Encryption.KMS.GetSecret(ctx, "")
 			if errors.Is(err, kmsapi.ErrGetSecretUnsupported) {
 				return err
 			}
@@ -924,13 +939,13 @@ func (vo *VolumeOptions) CopyEncryptionConfig(cp *VolumeOptions, vID, cpVID stri
 	}
 
 	if vo.Encryption.KMS.RequiresDEKStore() == kmsapi.DEKStoreIntegrated {
-		passphrase, err := vo.Encryption.GetCryptoPassphrase(vID)
+		passphrase, err := vo.Encryption.GetCryptoPassphrase(ctx, vID)
 		if err != nil {
 			return fmt.Errorf("failed to fetch passphrase for %q (%+v): %w",
 				vID, vo, err)
 		}
 
-		err = cp.Encryption.StoreCryptoPassphrase(cpVID, passphrase)
+		err = cp.Encryption.StoreCryptoPassphrase(ctx, cpVID, passphrase)
 		if err != nil {
 			return fmt.Errorf("failed to store passphrase for %q (%+v): %w",
 				cpVID, cp, err)
@@ -962,7 +977,7 @@ func (vo *VolumeOptions) ConfigureEncryption(
 		// store. Since not all "metadata" KMS support
 		// GetSecret, test for support here. Postpone any
 		// other error handling
-		_, err := vo.Encryption.KMS.GetSecret("")
+		_, err := vo.Encryption.KMS.GetSecret(ctx, "")
 		if errors.Is(err, kmsapi.ErrGetSecretUnsupported) {
 			return err
 		}
