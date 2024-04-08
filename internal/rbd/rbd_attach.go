@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -353,7 +354,6 @@ func attachRBDImage(ctx context.Context, volOptions *rbdVolume, device string, c
 		}
 
 		err = waitForrbdImage(ctx, backoff, volOptions)
-
 		if err != nil {
 			return "", err
 		}
@@ -364,7 +364,7 @@ func attachRBDImage(ctx context.Context, volOptions *rbdVolume, device string, c
 }
 
 func appendNbdDeviceTypeAndOptions(cmdArgs []string, userOptions, cookie string) []string {
-	isUnmap := CheckSliceContains(cmdArgs, "unmap")
+	isUnmap := slices.Contains(cmdArgs, "unmap")
 	if !isUnmap {
 		if !strings.Contains(userOptions, useNbdNetlink) {
 			cmdArgs = append(cmdArgs, "--"+useNbdNetlink)
