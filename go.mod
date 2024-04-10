@@ -11,7 +11,7 @@ require (
 	github.com/container-storage-interface/spec v1.9.0
 	github.com/csi-addons/spec v0.2.1-0.20230606140122-d20966d2e444
 	github.com/gemalto/kmip-go v0.0.10
-	github.com/golang/protobuf v1.5.3
+	github.com/golang/protobuf v1.5.4
 	github.com/google/fscrypt v0.3.4
 	github.com/google/uuid v1.4.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
@@ -29,7 +29,7 @@ require (
 	golang.org/x/net v0.19.0
 	golang.org/x/sys v0.15.0
 	google.golang.org/grpc v1.59.0
-	google.golang.org/protobuf v1.31.0
+	google.golang.org/protobuf v1.33.0
 	//
 	// when updating k8s.io/kubernetes, make sure to update the replace section too
 	//
