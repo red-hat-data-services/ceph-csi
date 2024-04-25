@@ -146,6 +146,8 @@ type rbdImage struct {
 
 	// Set metadata on volume
 	EnableMetadata bool
+	// ParentInTrash indicates the parent image is in trash.
+	ParentInTrash bool
 }
 
 // rbdVolume represents a CSI volume and its RBD image specifics.
@@ -1613,6 +1615,7 @@ func (ri *rbdImage) getImageInfo() error {
 	} else {
 		ri.ParentName = parentInfo.Image.ImageName
 		ri.ParentPool = parentInfo.Image.PoolName
+		ri.ParentInTrash = parentInfo.Image.Trash
 	}
 	// Get image creation time
 	tm, err := image.GetCreateTimestamp()
@@ -1631,7 +1634,9 @@ func (ri *rbdImage) getParent() (*rbdImage, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ri.ParentName == "" {
+	// The image may not have a parent or the parent maybe in trash.
+	// Return nil in both the cases.
+	if ri.ParentName == "" || ri.ParentInTrash {
 		return nil, nil
 	}
 
