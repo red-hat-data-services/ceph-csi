@@ -71,7 +71,6 @@ func TestValidateSchedulingInterval(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			err := validateSchedulingInterval(tt.interval)
@@ -147,7 +146,6 @@ func TestValidateSchedulingDetails(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			err := validateSchedulingDetails(ctx, tt.parameters)
@@ -203,7 +201,6 @@ func TestGetSchedulingDetails(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			interval, startTime := getSchedulingDetails(tt.parameters)
@@ -251,11 +248,10 @@ func TestCheckVolumeResyncStatus(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		ts := tt
-		t.Run(ts.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if err := checkVolumeResyncStatus(ctx, ts.args); (err != nil) != ts.wantErr {
-				t.Errorf("checkVolumeResyncStatus() error = %v, expect error = %v", err, ts.wantErr)
+			if err := checkVolumeResyncStatus(ctx, tt.args); (err != nil) != tt.wantErr {
+				t.Errorf("checkVolumeResyncStatus() error = %v, expect error = %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -265,12 +261,12 @@ func TestCheckRemoteSiteStatus(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
-		args      librbd.GlobalMirrorImageStatus
+		args      *librbd.GlobalMirrorImageStatus
 		wantReady bool
 	}{
 		{
 			name: "Test a single peer in sync",
-			args: librbd.GlobalMirrorImageStatus{
+			args: &librbd.GlobalMirrorImageStatus{
 				SiteStatuses: []librbd.SiteMirrorImageStatus{
 					{
 						MirrorUUID: "remote",
@@ -283,7 +279,7 @@ func TestCheckRemoteSiteStatus(t *testing.T) {
 		},
 		{
 			name: "Test a single peer in sync, including a local instance",
-			args: librbd.GlobalMirrorImageStatus{
+			args: &librbd.GlobalMirrorImageStatus{
 				SiteStatuses: []librbd.SiteMirrorImageStatus{
 					{
 						MirrorUUID: "remote",
@@ -301,7 +297,7 @@ func TestCheckRemoteSiteStatus(t *testing.T) {
 		},
 		{
 			name: "Test a multiple peers in sync",
-			args: librbd.GlobalMirrorImageStatus{
+			args: &librbd.GlobalMirrorImageStatus{
 				SiteStatuses: []librbd.SiteMirrorImageStatus{
 					{
 						MirrorUUID: "remote1",
@@ -319,14 +315,14 @@ func TestCheckRemoteSiteStatus(t *testing.T) {
 		},
 		{
 			name: "Test no remote peers",
-			args: librbd.GlobalMirrorImageStatus{
+			args: &librbd.GlobalMirrorImageStatus{
 				SiteStatuses: []librbd.SiteMirrorImageStatus{},
 			},
 			wantReady: false,
 		},
 		{
 			name: "Test single peer not in sync",
-			args: librbd.GlobalMirrorImageStatus{
+			args: &librbd.GlobalMirrorImageStatus{
 				SiteStatuses: []librbd.SiteMirrorImageStatus{
 					{
 						MirrorUUID: "remote",
@@ -339,7 +335,7 @@ func TestCheckRemoteSiteStatus(t *testing.T) {
 		},
 		{
 			name: "Test single peer not up",
-			args: librbd.GlobalMirrorImageStatus{
+			args: &librbd.GlobalMirrorImageStatus{
 				SiteStatuses: []librbd.SiteMirrorImageStatus{
 					{
 						MirrorUUID: "remote",
@@ -352,7 +348,7 @@ func TestCheckRemoteSiteStatus(t *testing.T) {
 		},
 		{
 			name: "Test multiple peers, when first peer is not in sync",
-			args: librbd.GlobalMirrorImageStatus{
+			args: &librbd.GlobalMirrorImageStatus{
 				SiteStatuses: []librbd.SiteMirrorImageStatus{
 					{
 						MirrorUUID: "remote1",
@@ -370,7 +366,7 @@ func TestCheckRemoteSiteStatus(t *testing.T) {
 		},
 		{
 			name: "Test multiple peers, when second peer is not up",
-			args: librbd.GlobalMirrorImageStatus{
+			args: &librbd.GlobalMirrorImageStatus{
 				SiteStatuses: []librbd.SiteMirrorImageStatus{
 					{
 						MirrorUUID: "remote1",
@@ -388,11 +384,10 @@ func TestCheckRemoteSiteStatus(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		ts := tt
-		t.Run(ts.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if ready := checkRemoteSiteStatus(context.TODO(), &ts.args); ready != ts.wantReady {
-				t.Errorf("checkRemoteSiteStatus() ready = %v, expect ready = %v", ready, ts.wantReady)
+			if ready := checkRemoteSiteStatus(context.TODO(), tt.args); ready != tt.wantReady {
+				t.Errorf("checkRemoteSiteStatus() ready = %v, expect ready = %v", ready, tt.wantReady)
 			}
 		})
 	}
@@ -501,7 +496,6 @@ func TestValidateLastSyncInfo(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			teststruct, err := getLastSyncInfo(ctx, tt.description)
@@ -600,7 +594,6 @@ func TestGetGRPCError(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			result := getGRPCError(tt.err)
@@ -656,7 +649,6 @@ func Test_timestampFromString(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := timestampFromString(tt.timestamp)
