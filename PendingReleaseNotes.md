@@ -1,9 +1,10 @@
-# v3.11 Pending Release Notes
+# v3.12 Pending Release Notes
 
 ## Breaking Changes
 
 ## Features
 
-- kms: added Azure Key Vault as a supported KMS in [PR](https://github.com/ceph/ceph-csi/pull/4455)
+- deploy: podSecurityContexts can be configured for ceph-csi-cephfs chart in [PR](https://github.com/ceph/ceph-csi/pull/4664).
+- deploy: podSecurityContexts can be configured for ceph-csi-rbd chart in [PR](https://github.com/ceph/ceph-csi/pull/4668)
 
 ## NOTE
