@@ -41,7 +41,7 @@ type VolumeGroupJournal interface {
 	UndoReservation(
 		ctx context.Context,
 		csiJournalPool,
-		snapshotGroupName,
+		groupName,
 		reqName string) error
 	// GetGroupAttributes fetches all keys and their values, from a UUID directory,
 	// returning VolumeGroupAttributes structure.
@@ -55,19 +55,22 @@ type VolumeGroupJournal interface {
 		journalPoolID int64,
 		reqName,
 		namePrefix string) (string, string, error)
-	// AddVolumeSnapshotMapping adds a volumeID and snapshotID mapping to the UUID directory.
-	AddVolumeSnapshotMapping(
+	// AddVolumesMapping adds a volumeMap map which contains volumeID's and its
+	// corresponding values mapping which need to be added to the UUID
+	// directory. value can be anything which needs mapping, in case of
+	// volumegroupsnapshot its a snapshotID and its empty in case of
+	// volumegroup.
+	AddVolumesMapping(
 		ctx context.Context,
 		pool,
-		reservedUUID,
-		volumeID,
-		snapshotID string) error
-	// RemoveVolumeSnapshotMapping removes a volumeID and snapshotID mapping from the UUID directory.
-	RemoveVolumeSnapshotMapping(
+		reservedUUID string,
+		volumeMap map[string]string) error
+	// RemoveVolumesMapping removes volumeIDs mapping from the UUID directory.
+	RemoveVolumesMapping(
 		ctx context.Context,
 		pool,
-		reservedUUID,
-		volumeID string) error
+		reservedUUID string,
+		volumeIDs []string) error
 }
 
 // VolumeGroupJournalConfig contains the configuration.
@@ -222,7 +225,7 @@ func (vgjc *VolumeGroupJournalConnection) CheckReservation(ctx context.Context,
 	volGroupData.GroupName = savedVolumeGroupAttributes.GroupName
 	volGroupData.VolumeGroupAttributes = &VolumeGroupAttributes{}
 	volGroupData.VolumeGroupAttributes.RequestName = savedVolumeGroupAttributes.RequestName
-	volGroupData.VolumeGroupAttributes.VolumeSnapshotMap = savedVolumeGroupAttributes.VolumeSnapshotMap
+	volGroupData.VolumeGroupAttributes.VolumeMap = savedVolumeGroupAttributes.VolumeMap
 
 	return volGroupData, nil
 }
@@ -361,9 +364,9 @@ func (vgjc *VolumeGroupJournalConnection) ReserveName(ctx context.Context,
 // VolumeGroupAttributes contains the request name and the volumeID's and
 // the corresponding snapshotID's.
 type VolumeGroupAttributes struct {
-	RequestName       string            // Contains the request name for the passed in UUID
-	GroupName         string            // Contains the group name
-	VolumeSnapshotMap map[string]string // Contains the volumeID and the corresponding snapshotID mapping
+	RequestName string            // Contains the request name for the passed in UUID
+	GroupName   string            // Contains the group name
+	VolumeMap   map[string]string // Contains the volumeID and the corresponding value mapping
 }
 
 func (vgjc *VolumeGroupJournalConnection) GetVolumeGroupAttributes(
@@ -393,25 +396,24 @@ func (vgjc *VolumeGroupJournalConnection) GetVolumeGroupAttributes(
 	// looking for volumeID/snapshotID mapping
 	delete(values, cj.csiNameKey)
 	delete(values, cj.csiImageKey)
-	groupAttributes.VolumeSnapshotMap = map[string]string{}
+	groupAttributes.VolumeMap = map[string]string{}
 	for k, v := range values {
-		groupAttributes.VolumeSnapshotMap[k] = v
+		groupAttributes.VolumeMap[k] = v
 	}
 
 	return groupAttributes, nil
 }
 
-func (vgjc *VolumeGroupJournalConnection) AddVolumeSnapshotMapping(
+func (vgjc *VolumeGroupJournalConnection) AddVolumesMapping(
 	ctx context.Context,
 	pool,
-	reservedUUID,
-	volumeID,
-	snapshotID string,
+	reservedUUID string,
+	volumeMap map[string]string,
 ) error {
 	err := setOMapKeys(ctx, vgjc.connection, pool, vgjc.config.namespace, vgjc.config.cephUUIDDirectoryPrefix+reservedUUID,
-		map[string]string{volumeID: snapshotID})
+		volumeMap)
 	if err != nil {
-		log.ErrorLog(ctx, "failed adding volume snapshot mapping: %v", err)
+		log.ErrorLog(ctx, "failed to add volumeMap %v: %w ", volumeMap, err)
 
 		return err
 	}
@@ -419,17 +421,17 @@ func (vgjc *VolumeGroupJournalConnection) AddVolumeSnapshotMapping(
 	return nil
 }
 
-func (vgjc *VolumeGroupJournalConnection) RemoveVolumeSnapshotMapping(
+func (vgjc *VolumeGroupJournalConnection) RemoveVolumesMapping(
 	ctx context.Context,
 	pool,
-	reservedUUID,
-	volumeID string,
+	reservedUUID string,
+	volumeIDs []string,
 ) error {
 	err := removeMapKeys(ctx, vgjc.connection, pool, vgjc.config.namespace,
 		vgjc.config.cephUUIDDirectoryPrefix+reservedUUID,
-		[]string{volumeID})
+		volumeIDs)
 	if err != nil {
-		log.ErrorLog(ctx, "failed removing volume snapshot mapping: %v", err)
+		log.ErrorLog(ctx, "failed removing volume mapping from group: key: %q %v", volumeIDs, err)
 
 		return err
 	}
