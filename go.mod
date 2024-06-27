@@ -9,7 +9,7 @@ require (
 	github.com/ceph/ceph-csi/api v0.0.0-00010101000000-000000000000
 	github.com/ceph/go-ceph v0.28.0
 	github.com/container-storage-interface/spec v1.9.0
-	github.com/csi-addons/spec v0.2.1-0.20230606140122-d20966d2e444
+	github.com/csi-addons/spec v0.2.1-0.20240619103729-12c61f25a2a5
 	github.com/gemalto/kmip-go v0.0.10
 	github.com/golang/protobuf v1.5.4
 	github.com/google/fscrypt v0.3.6-0.20240502174735-068b9f8f5dec
@@ -37,8 +37,8 @@ require (
 	k8s.io/apimachinery v0.30.2
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/cloud-provider v0.30.2
-	k8s.io/klog/v2 v2.120.1
-	k8s.io/kubernetes v1.30.1
+	k8s.io/klog/v2 v2.130.1
+	k8s.io/kubernetes v1.30.2
 	k8s.io/mount-utils v0.30.2
 	k8s.io/pod-security-admission v0.30.2
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b
@@ -101,9 +101,8 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.16.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
-	github.com/hashicorp/go-hclog v1.2.2 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/hashicorp/go-retryablehttp v0.7.1 // indirect
+	github.com/hashicorp/go-retryablehttp v0.7.7 // indirect
 	github.com/hashicorp/go-rootcerts v1.0.2 // indirect
 	github.com/hashicorp/go-secure-stdlib/parseutil v0.1.6 // indirect
 	github.com/hashicorp/go-secure-stdlib/strutil v0.1.2 // indirect
@@ -119,7 +118,7 @@ require (
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
-	github.com/mattn/go-isatty v0.0.17 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 // indirect
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
