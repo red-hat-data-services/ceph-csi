@@ -335,7 +335,7 @@ func (cs *ControllerServer) CreateVolume(
 	if err != nil {
 		return nil, err
 	}
-	defer rbdVol.Destroy()
+	defer rbdVol.Destroy(ctx)
 	// Existence and conflict checks
 	if acquired := cs.VolumeLocks.TryAcquire(req.GetName()); !acquired {
 		log.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, req.GetName())
@@ -349,10 +349,10 @@ func (cs *ControllerServer) CreateVolume(
 		return nil, err
 	}
 	if parentVol != nil {
-		defer parentVol.Destroy()
+		defer parentVol.Destroy(ctx)
 	}
 	if rbdSnap != nil {
-		defer rbdSnap.Destroy()
+		defer rbdSnap.Destroy(ctx)
 	}
 
 	err = updateTopologyConstraints(rbdVol, rbdSnap)
@@ -403,7 +403,7 @@ func (cs *ControllerServer) CreateVolume(
 	metadata := k8s.GetVolumeMetadata(req.GetParameters())
 	err = rbdVol.setAllMetadata(metadata)
 	if err != nil {
-		if deleteErr := rbdVol.deleteImage(ctx); deleteErr != nil {
+		if deleteErr := rbdVol.Delete(ctx); deleteErr != nil {
 			log.ErrorLog(ctx, "failed to delete rbd image: %s with error: %v", rbdVol, deleteErr)
 		}
 
@@ -465,7 +465,7 @@ func flattenParentImage(
 		// in case of any error call Destroy for cleanup.
 		defer func() {
 			if err != nil {
-				rbdSnap.Destroy()
+				rbdSnap.Destroy(ctx)
 			}
 		}()
 
@@ -621,7 +621,7 @@ func checkFlatten(ctx context.Context, rbdVol *rbdVolume, cr *util.Credentials) 
 		if errors.Is(err, ErrFlattenInProgress) {
 			return status.Error(codes.Aborted, err.Error())
 		}
-		if errDefer := rbdVol.deleteImage(ctx); errDefer != nil {
+		if errDefer := rbdVol.Delete(ctx); errDefer != nil {
 			log.ErrorLog(ctx, "failed to delete rbd image: %s with error: %v", rbdVol, errDefer)
 
 			return status.Error(codes.Internal, err.Error())
@@ -661,14 +661,14 @@ func (cs *ControllerServer) createVolumeFromSnapshot(
 
 		return status.Error(codes.Internal, err.Error())
 	}
-	defer rbdSnap.Destroy()
+	defer rbdSnap.Destroy(ctx)
 
 	// update parent name(rbd image name in snapshot)
 	rbdSnap.RbdImageName = rbdSnap.RbdSnapName
 	parentVol := rbdSnap.toVolume()
 	// as we are operating on single cluster reuse the connection
 	parentVol.conn = rbdVol.conn.Copy()
-	defer parentVol.Destroy()
+	defer parentVol.Destroy(ctx)
 
 	// create clone image and delete snapshot
 	err = rbdVol.cloneRbdImageFromSnapshot(ctx, rbdSnap, parentVol)
@@ -681,7 +681,7 @@ func (cs *ControllerServer) createVolumeFromSnapshot(
 	defer func() {
 		if err != nil {
 			log.DebugLog(ctx, "Removing clone image %q", rbdVol)
-			errDefer := rbdVol.deleteImage(ctx)
+			errDefer := rbdVol.Delete(ctx)
 			if errDefer != nil {
 				log.ErrorLog(ctx, "failed to delete clone image %q: %v", rbdVol, errDefer)
 			}
@@ -764,7 +764,7 @@ func (cs *ControllerServer) createBackingImage(
 
 	defer func() {
 		if err != nil {
-			if deleteErr := rbdVol.deleteImage(ctx); deleteErr != nil {
+			if deleteErr := rbdVol.Delete(ctx); deleteErr != nil {
 				log.ErrorLog(ctx, "failed to delete rbd image: %s with error: %v", rbdVol, deleteErr)
 			}
 		}
@@ -944,7 +944,7 @@ func (cs *ControllerServer) DeleteVolume(
 	rbdVol, err := GenVolFromVolID(ctx, volumeID, cr, req.GetSecrets())
 	defer func() {
 		if rbdVol != nil {
-			rbdVol.Destroy()
+			rbdVol.Destroy(ctx)
 		}
 	}()
 	if err != nil {
@@ -1029,7 +1029,7 @@ func cleanupRBDImage(ctx context.Context,
 
 	// Deleting rbd image
 	log.DebugLog(ctx, "deleting image %s", rbdVol.RbdImageName)
-	if err = rbdVol.deleteImage(ctx); err != nil {
+	if err = rbdVol.Delete(ctx); err != nil {
 		log.ErrorLog(ctx, "failed to delete rbd image: %s with error: %v",
 			rbdVol, err)
 
@@ -1094,7 +1094,7 @@ func (cs *ControllerServer) CreateSnapshot(
 	rbdVol, err := GenVolFromVolID(ctx, req.GetSourceVolumeId(), cr, req.GetSecrets())
 	defer func() {
 		if rbdVol != nil {
-			rbdVol.Destroy()
+			rbdVol.Destroy(ctx)
 		}
 	}()
 	if err != nil {
@@ -1188,7 +1188,7 @@ func (cs *ControllerServer) CreateSnapshot(
 	defer func() {
 		if err != nil {
 			log.DebugLog(ctx, "Removing clone image %q", rbdVol)
-			errDefer := rbdVol.deleteImage(ctx)
+			errDefer := rbdVol.Delete(ctx)
 			if errDefer != nil {
 				log.ErrorLog(ctx, "failed to delete clone image %q: %v", rbdVol, errDefer)
 			}
@@ -1237,7 +1237,7 @@ func cloneFromSnapshot(
 
 		return nil, status.Errorf(codes.Internal, err.Error())
 	}
-	defer vol.Destroy()
+	defer vol.Destroy(ctx)
 
 	err = rbdVol.copyEncryptionConfig(ctx, &vol.rbdImage, false)
 	if err != nil {
@@ -1313,7 +1313,7 @@ func (cs *ControllerServer) doSnapshotClone(
 ) (*rbdVolume, error) {
 	// generate cloned volume details from snapshot
 	cloneRbd := rbdSnap.toVolume()
-	defer cloneRbd.Destroy()
+	defer cloneRbd.Destroy(ctx)
 	// add image feature for cloneRbd
 	f := []string{librbd.FeatureNameLayering, librbd.FeatureNameDeepFlatten}
 	cloneRbd.ImageFeatureSet = librbd.FeatureSetFromNames(f)
@@ -1460,7 +1460,7 @@ func (cs *ControllerServer) DeleteSnapshot(
 
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	defer rbdSnap.Destroy()
+	defer rbdSnap.Destroy(ctx)
 
 	// safeguard against parallel create or delete requests against the same
 	// name
@@ -1480,7 +1480,7 @@ func (cs *ControllerServer) DeleteSnapshot(
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	defer rbdVol.Destroy()
+	defer rbdVol.Destroy(ctx)
 
 	rbdVol.ImageID = rbdSnap.ImageID
 	// update parent name to delete the snapshot
@@ -1510,7 +1510,7 @@ func cleanUpImageAndSnapReservation(ctx context.Context, rbdSnap *rbdSnapshot, c
 	if err != nil {
 		return status.Error(codes.Internal, err.Error())
 	}
-	defer rbdVol.Destroy()
+	defer rbdVol.Destroy(ctx)
 
 	err = rbdVol.openIoctx()
 	if err != nil {
@@ -1584,7 +1584,7 @@ func (cs *ControllerServer) ControllerExpandVolume(
 
 		return nil, err
 	}
-	defer rbdVol.Destroy()
+	defer rbdVol.Destroy(ctx)
 
 	// NodeExpansion is needed for PersistentVolumes with,
 	// 1. Filesystem VolumeMode with & without Encryption and

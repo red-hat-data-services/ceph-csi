@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	types "github.com/ceph/ceph-csi/internal/rbd_types"
 	"github.com/ceph/ceph-csi/internal/util"
 	"github.com/ceph/ceph-csi/internal/util/log"
 
@@ -149,6 +150,9 @@ type rbdImage struct {
 	// ParentInTrash indicates the parent image is in trash.
 	ParentInTrash bool
 }
+
+// check that rbdVolume implements the types.Volume interface.
+var _ types.Volume = &rbdVolume{}
 
 // rbdVolume represents a CSI volume and its RBD image specifics.
 type rbdVolume struct {
@@ -385,7 +389,7 @@ func (ri *rbdImage) Connect(cr *util.Credentials) error {
 
 // Destroy cleans up the rbdVolume and closes the connection to the Ceph
 // cluster in case one was setup.
-func (ri *rbdImage) Destroy() {
+func (ri *rbdImage) Destroy(ctx context.Context) {
 	if ri.ioctx != nil {
 		ri.ioctx.Destroy()
 	}
@@ -416,6 +420,11 @@ func (rs *rbdSnapshot) String() string {
 	}
 
 	return fmt.Sprintf("%s/%s@%s", rs.Pool, rs.RbdImageName, rs.RbdSnapName)
+}
+
+// GetID returns the CSI volume handle of the image.
+func (ri *rbdImage) GetID(ctx context.Context) (string, error) {
+	return ri.VolID, nil
 }
 
 // createImage creates a new ceph image with provision and volume options.
@@ -627,8 +636,8 @@ func (ri *rbdImage) ensureImageCleanup(ctx context.Context) error {
 	return nil
 }
 
-// deleteImage deletes a ceph image with provision and volume options.
-func (ri *rbdImage) deleteImage(ctx context.Context) error {
+// Delete deletes a ceph image with provision and volume options.
+func (ri *rbdImage) Delete(ctx context.Context) error {
 	image := ri.RbdImageName
 
 	log.DebugLog(ctx, "rbd: delete %s using mon %s, pool %s", image, ri.Monitors, ri.Pool)
@@ -706,7 +715,7 @@ func (ri *rbdImage) trashRemoveImage(ctx context.Context) error {
 // DeleteTempImage deletes the temporary image created for volume datasource.
 func (rv *rbdVolume) DeleteTempImage(ctx context.Context) error {
 	tempClone := rv.generateTempClone()
-	err := tempClone.deleteImage(ctx)
+	err := tempClone.Delete(ctx)
 	if err != nil {
 		if errors.Is(err, ErrImageNotFound) {
 			return tempClone.ensureImageCleanup(ctx)
@@ -777,7 +786,7 @@ func flattenClonedRbdImages(
 	rv.Pool = pool
 	rv.RbdImageName = rbdImageName
 
-	defer rv.Destroy()
+	defer rv.Destroy(ctx)
 	err := rv.Connect(cr)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to open connection %s; err %v", rv, err)
@@ -1045,7 +1054,7 @@ func genSnapFromSnapID(
 	}
 	defer func() {
 		if err != nil {
-			rbdSnap.Destroy()
+			rbdSnap.Destroy(ctx)
 		}
 	}()
 
@@ -1064,7 +1073,7 @@ func genSnapFromSnapID(
 		}
 	}
 
-	err = updateSnapshotDetails(rbdSnap)
+	err = updateSnapshotDetails(ctx, rbdSnap)
 	if err != nil {
 		return rbdSnap, fmt.Errorf("failed to update snapshot details for %q: %w", rbdSnap, err)
 	}
@@ -1074,13 +1083,13 @@ func genSnapFromSnapID(
 
 // updateSnapshotDetails will copy the details from the rbdVolume to the
 // rbdSnapshot. example copying size from rbdVolume to rbdSnapshot.
-func updateSnapshotDetails(rbdSnap *rbdSnapshot) error {
+func updateSnapshotDetails(ctx context.Context, rbdSnap *rbdSnapshot) error {
 	vol := rbdSnap.toVolume()
 	err := vol.Connect(rbdSnap.conn.Creds)
 	if err != nil {
 		return err
 	}
-	defer vol.Destroy()
+	defer vol.Destroy(ctx)
 
 	err = vol.getImageInfo()
 	if err != nil {
@@ -1685,7 +1694,7 @@ func (ri *rbdImage) flattenParent(ctx context.Context, hardLimit, softLimit uint
 	if parentImage == nil {
 		return nil
 	}
-	defer parentImage.Destroy()
+	defer parentImage.Destroy(ctx)
 
 	return parentImage.flattenRbdImage(ctx, false, hardLimit, softLimit)
 }
@@ -2128,7 +2137,7 @@ func genVolFromVolIDWithMigration(
 	}
 	rv, err := GenVolFromVolID(ctx, volID, cr, secrets)
 	if err != nil {
-		rv.Destroy()
+		rv.Destroy(ctx)
 	}
 
 	return rv, err
