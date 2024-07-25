@@ -18,7 +18,6 @@ package rbd
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/ceph/ceph-csi/internal/rbd"
 	"github.com/ceph/ceph-csi/internal/rbd/types"
@@ -37,12 +36,17 @@ type VolumeGroupServer struct {
 	// if volumegroup spec add more RPC services in the proto file, then we
 	// don't need to add all RPC methods leading to forward compatibility.
 	*volumegroup.UnimplementedControllerServer
+
+	// csiID is the unique ID for this CSI-driver deployment.
+	csiID string
 }
 
 // NewVolumeGroupServer creates a new VolumeGroupServer which handles the
 // VolumeGroup Service requests from the CSI-Addons specification.
-func NewVolumeGroupServer() *VolumeGroupServer {
-	return &VolumeGroupServer{}
+func NewVolumeGroupServer(instanceID string) *VolumeGroupServer {
+	return &VolumeGroupServer{
+		csiID: instanceID,
+	}
 }
 
 func (vs *VolumeGroupServer) RegisterService(server grpc.ServiceRegistrar) {
@@ -77,7 +81,7 @@ func (vs *VolumeGroupServer) CreateVolumeGroup(
 	ctx context.Context,
 	req *volumegroup.CreateVolumeGroupRequest,
 ) (*volumegroup.CreateVolumeGroupResponse, error) {
-	mgr := rbd.NewManager(req.GetParameters(), req.GetSecrets())
+	mgr := rbd.NewManager(vs.csiID, req.GetParameters(), req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
 	// resolve all volumes
@@ -98,7 +102,7 @@ func (vs *VolumeGroupServer) CreateVolumeGroup(
 		volumes[i] = vol
 	}
 
-	log.DebugLog(ctx, fmt.Sprintf("all %d Volumes for VolumeGroup %q have been found", len(volumes), req.GetName()))
+	log.DebugLog(ctx, "all %d Volumes for VolumeGroup %q have been found", len(volumes), req.GetName())
 
 	// create a RBDVolumeGroup
 	vg, err := mgr.CreateVolumeGroup(ctx, req.GetName())
@@ -110,7 +114,7 @@ func (vs *VolumeGroupServer) CreateVolumeGroup(
 			err.Error())
 	}
 
-	log.DebugLog(ctx, fmt.Sprintf("VolumeGroup %q had been created", req.GetName()))
+	log.DebugLog(ctx, "VolumeGroup %q has been created: %+v", req.GetName(), vg)
 
 	// add each rbd-image to the RBDVolumeGroup
 	for _, vol := range volumes {
@@ -125,10 +129,19 @@ func (vs *VolumeGroupServer) CreateVolumeGroup(
 		}
 	}
 
-	log.DebugLog(ctx, fmt.Sprintf("all %d Volumes have been added to for VolumeGroup %q", len(volumes), req.GetName()))
+	log.DebugLog(ctx, "all %d Volumes have been added to for VolumeGroup %q", len(volumes), req.GetName())
+
+	csiVG, err := vg.ToCSI(ctx)
+	if err != nil {
+		return nil, status.Errorf(
+			codes.Internal,
+			"failed to convert volume group %q to CSI type: %s",
+			req.GetName(),
+			err.Error())
+	}
 
 	return &volumegroup.CreateVolumeGroupResponse{
-		VolumeGroup: vg.ToCSI(ctx),
+		VolumeGroup: csiVG,
 	}, nil
 }
 
@@ -154,7 +167,7 @@ func (vs *VolumeGroupServer) DeleteVolumeGroup(
 	ctx context.Context,
 	req *volumegroup.DeleteVolumeGroupRequest,
 ) (*volumegroup.DeleteVolumeGroupResponse, error) {
-	mgr := rbd.NewManager(nil, req.GetSecrets())
+	mgr := rbd.NewManager(vs.csiID, nil, req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
 	// resolve the volume group
@@ -168,7 +181,7 @@ func (vs *VolumeGroupServer) DeleteVolumeGroup(
 	}
 	defer vg.Destroy(ctx)
 
-	log.DebugLog(ctx, fmt.Sprintf("VolumeGroup %q has been found", req.GetVolumeGroupId()))
+	log.DebugLog(ctx, "VolumeGroup %q has been found", req.GetVolumeGroupId())
 
 	// verify that the volume group is empty
 	volumes, err := vg.ListVolumes(ctx)
@@ -180,7 +193,7 @@ func (vs *VolumeGroupServer) DeleteVolumeGroup(
 			err.Error())
 	}
 
-	log.DebugLog(ctx, fmt.Sprintf("VolumeGroup %q contains %d volumes", req.GetVolumeGroupId(), len(volumes)))
+	log.DebugLog(ctx, "VolumeGroup %q contains %d volumes", req.GetVolumeGroupId(), len(volumes))
 
 	if len(volumes) != 0 {
 		return nil, status.Errorf(
@@ -198,7 +211,7 @@ func (vs *VolumeGroupServer) DeleteVolumeGroup(
 			err.Error())
 	}
 
-	log.DebugLog(ctx, fmt.Sprintf("VolumeGroup %q has been deleted", req.GetVolumeGroupId()))
+	log.DebugLog(ctx, "VolumeGroup %q has been deleted", req.GetVolumeGroupId())
 
 	return &volumegroup.DeleteVolumeGroupResponse{}, nil
 }

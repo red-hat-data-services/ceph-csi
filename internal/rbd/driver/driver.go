@@ -222,13 +222,16 @@ func (r *Driver) setupCSIAddonsServer(conf *util.Config) error {
 		rcs := casrbd.NewReplicationServer(NewControllerServer(r.cd))
 		r.cas.RegisterService(rcs)
 
-		vgcs := casrbd.NewVolumeGroupServer()
+		vgcs := casrbd.NewVolumeGroupServer(conf.InstanceID)
 		r.cas.RegisterService(vgcs)
 	}
 
 	if conf.IsNodeServer {
 		rs := casrbd.NewReclaimSpaceNodeServer()
 		r.cas.RegisterService(rs)
+
+		ekr := casrbd.NewEncryptionKeyRotationServer(r.ns.VolumeLocks)
+		r.cas.RegisterService(ekr)
 	}
 
 	// start the server, this does not block, it runs a new go-routine
