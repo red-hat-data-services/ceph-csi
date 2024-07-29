@@ -114,6 +114,12 @@ func (is *IdentityServer) GetCapabilities(
 						Type: identity.Capability_VolumeGroup_LIMIT_VOLUME_TO_ONE_VOLUME_GROUP,
 					},
 				},
+			}, &identity.Capability{
+				Type: &identity.Capability_VolumeGroup_{
+					VolumeGroup: &identity.Capability_VolumeGroup{
+						Type: identity.Capability_VolumeGroup_MODIFY_VOLUME_GROUP,
+					},
+				},
 			})
 	}
 
@@ -131,6 +137,13 @@ func (is *IdentityServer) GetCapabilities(
 				Type: &identity.Capability_ReclaimSpace_{
 					ReclaimSpace: &identity.Capability_ReclaimSpace{
 						Type: identity.Capability_ReclaimSpace_ONLINE,
+					},
+				},
+			},
+			&identity.Capability{
+				Type: &identity.Capability_EncryptionKeyRotation_{
+					EncryptionKeyRotation: &identity.Capability_EncryptionKeyRotation{
+						Type: identity.Capability_EncryptionKeyRotation_ENCRYPTIONKEYROTATION,
 					},
 				},
 			})
