@@ -20,6 +20,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/ceph/ceph-csi/internal/util"
 	"github.com/ceph/ceph-csi/internal/util/log"
 )
@@ -98,6 +101,27 @@ func cleanUpSnapshot(
 	return nil
 }
 
+func (rv *rbdVolume) toSnapshot() *rbdSnapshot {
+	return &rbdSnapshot{
+		rbdImage: rbdImage{
+			ClusterID:      rv.ClusterID,
+			VolID:          rv.VolID,
+			Monitors:       rv.Monitors,
+			Pool:           rv.Pool,
+			JournalPool:    rv.JournalPool,
+			RadosNamespace: rv.RadosNamespace,
+			RbdImageName:   rv.RbdImageName,
+			ImageID:        rv.ImageID,
+			CreatedAt:      rv.CreatedAt,
+			// copyEncryptionConfig cannot be used here because the volume and the
+			// snapshot will have the same volumeID which cases the panic in
+			// copyEncryptionConfig function.
+			blockEncryption: rv.blockEncryption,
+			fileEncryption:  rv.fileEncryption,
+		},
+	}
+}
+
 func (rbdSnap *rbdSnapshot) toVolume() *rbdVolume {
 	return &rbdVolume{
 		rbdImage: rbdImage{
@@ -109,6 +133,7 @@ func (rbdSnap *rbdSnapshot) toVolume() *rbdVolume {
 			RadosNamespace: rbdSnap.RadosNamespace,
 			RbdImageName:   rbdSnap.RbdSnapName,
 			ImageID:        rbdSnap.ImageID,
+			CreatedAt:      rbdSnap.CreatedAt,
 			// copyEncryptionConfig cannot be used here because the volume and the
 			// snapshot will have the same volumeID which cases the panic in
 			// copyEncryptionConfig function.
@@ -116,6 +141,16 @@ func (rbdSnap *rbdSnapshot) toVolume() *rbdVolume {
 			fileEncryption:  rbdSnap.fileEncryption,
 		},
 	}
+}
+
+func (rbdSnap *rbdSnapshot) ToCSI(ctx context.Context) (*csi.Snapshot, error) {
+	return &csi.Snapshot{
+		SizeBytes:      rbdSnap.VolSize,
+		SnapshotId:     rbdSnap.VolID,
+		SourceVolumeId: rbdSnap.SourceVolumeID,
+		CreationTime:   timestamppb.New(*rbdSnap.CreatedAt),
+		ReadyToUse:     true,
+	}, nil
 }
 
 func undoSnapshotCloning(

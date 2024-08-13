@@ -1235,14 +1235,13 @@ func (cs *ControllerServer) CreateSnapshot(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	csiSnap, err := vol.toSnapshot().ToCSI(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
 	return &csi.CreateSnapshotResponse{
-		Snapshot: &csi.Snapshot{
-			SizeBytes:      vol.VolSize,
-			SnapshotId:     vol.VolID,
-			SourceVolumeId: req.GetSourceVolumeId(),
-			CreationTime:   vol.CreatedAt,
-			ReadyToUse:     true,
-		},
+		Snapshot: csiSnap,
 	}, nil
 }
 
@@ -1295,14 +1294,13 @@ func cloneFromSnapshot(
 		}
 	}
 
+	csiSnap, err := rbdSnap.ToCSI(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
 	return &csi.CreateSnapshotResponse{
-		Snapshot: &csi.Snapshot{
-			SizeBytes:      rbdSnap.VolSize,
-			SnapshotId:     rbdSnap.VolID,
-			SourceVolumeId: rbdSnap.SourceVolumeID,
-			CreationTime:   rbdSnap.CreatedAt,
-			ReadyToUse:     true,
-		},
+		Snapshot: csiSnap,
 	}, nil
 }
 
