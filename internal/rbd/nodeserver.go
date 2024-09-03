@@ -1202,6 +1202,13 @@ func (ns *NodeServer) NodeGetCapabilities(
 			{
 				Type: &csi.NodeServiceCapability_Rpc{
 					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_VOLUME_CONDITION,
+					},
+				},
+			},
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
 						Type: csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
 					},
 				},
@@ -1357,6 +1364,10 @@ func blockNodeGetVolumeStats(ctx context.Context, targetPath string) (*csi.NodeG
 				Total: m.Capacity.Value(),
 				Unit:  csi.VolumeUsage_BYTES,
 			},
+		},
+		VolumeCondition: &csi.VolumeCondition{
+			Abnormal: false,
+			Message:  "volume is in a healthy condition",
 		},
 	}, nil
 }
