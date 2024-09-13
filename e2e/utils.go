@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v7/apis/volumesnapshot/v1"
+	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batch "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
@@ -52,8 +52,9 @@ const (
 	rbdType    = "rbd"
 	cephfsType = "cephfs"
 
-	volumesType = "volumes"
-	snapsType   = "snaps"
+	volumesType    = "volumes"
+	snapsType      = "snaps"
+	groupSnapsType = "groupsnaps"
 
 	rookToolBoxPodLabel = "app=rook-ceph-tools"
 	rbdMountOptions     = "mountOptions"
@@ -174,17 +175,20 @@ func validateOmapCount(f *framework.Framework, count int, driver, pool, mode str
 			volumeMode: volumesType,
 			driverType: cephfsType,
 			radosLsCmd: fmt.Sprintf("rados ls --pool=%s --namespace csi", pool),
-			radosLsCmdFilter: fmt.Sprintf("rados ls --pool=%s --namespace csi | grep -v default | grep -c ^csi.volume.",
+			radosLsCmdFilter: fmt.Sprintf(
+				"rados ls --pool=%s --namespace csi | grep -v default | grep -v csi.volume.group. | grep -c ^csi.volume.",
 				pool),
 			radosLsKeysCmd: fmt.Sprintf("rados listomapkeys csi.volumes.default --pool=%s --namespace csi", pool),
-			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.volumes.default --pool=%s --namespace csi|wc -l",
+			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.volumes.default --pool=%s --namespace csi | wc -l",
 				pool),
 		},
 		{
-			volumeMode:           volumesType,
-			driverType:           rbdType,
-			radosLsCmd:           "rados ls " + rbdOptions(pool),
-			radosLsCmdFilter:     fmt.Sprintf("rados ls %s | grep -v default | grep -c ^csi.volume.", rbdOptions(pool)),
+			volumeMode: volumesType,
+			driverType: rbdType,
+			radosLsCmd: "rados ls " + rbdOptions(pool),
+			radosLsCmdFilter: fmt.Sprintf(
+				"rados ls %s | grep -v default | grep -v csi.volume.group. |  grep -c ^csi.volume.",
+				rbdOptions(pool)),
 			radosLsKeysCmd:       "rados listomapkeys csi.volumes.default " + rbdOptions(pool),
 			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.volumes.default %s | wc -l", rbdOptions(pool)),
 		},
@@ -195,7 +199,7 @@ func validateOmapCount(f *framework.Framework, count int, driver, pool, mode str
 			radosLsCmdFilter: fmt.Sprintf("rados ls --pool=%s --namespace csi | grep -v default | grep -c ^csi.snap.",
 				pool),
 			radosLsKeysCmd: fmt.Sprintf("rados listomapkeys csi.snaps.default --pool=%s --namespace csi", pool),
-			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.snaps.default --pool=%s --namespace csi|wc -l",
+			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.snaps.default --pool=%s --namespace csi | wc -l",
 				pool),
 		},
 		{
@@ -205,6 +209,16 @@ func validateOmapCount(f *framework.Framework, count int, driver, pool, mode str
 			radosLsCmdFilter:     fmt.Sprintf("rados ls %s | grep -v default | grep -c ^csi.snap.", rbdOptions(pool)),
 			radosLsKeysCmd:       "rados listomapkeys csi.snaps.default " + rbdOptions(pool),
 			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.snaps.default %s | wc -l", rbdOptions(pool)),
+		},
+		{
+			volumeMode: groupSnapsType,
+			driverType: cephfsType,
+			radosLsCmd: fmt.Sprintf("rados ls --pool=%s --namespace csi", pool),
+			radosLsCmdFilter: fmt.Sprintf("rados ls --pool=%s --namespace csi | grep -v default | grep -c ^csi.volume.group.",
+				pool),
+			radosLsKeysCmd: fmt.Sprintf("rados listomapkeys csi.groups.default --pool=%s --namespace csi", pool),
+			radosLsKeysCmdFilter: fmt.Sprintf("rados listomapkeys csi.groups.default --pool=%s --namespace csi | wc -l",
+				pool),
 		},
 	}
 
@@ -228,7 +242,7 @@ func validateOmapCount(f *framework.Framework, count int, driver, pool, mode str
 			if err == nil {
 				continue
 			}
-			saveErr := err
+			saveErr := fmt.Errorf("failed to validate omap count for %s: %w", cmd, err)
 			if strings.Contains(err.Error(), "expected omap object count") {
 				stdOut, stdErr, err = execCommandInToolBoxPod(f, filterLessCmds[i], rookNamespace)
 				if err == nil {
@@ -821,6 +835,15 @@ func oneReplicaDeployYaml(template string) string {
 	re := regexp.MustCompile(`(\s+replicas:) \d+`)
 
 	return re.ReplaceAllString(template, `$1 1`)
+}
+
+// replaceLogLevelInTemplate replaces the log level in the template file to 5.
+func replaceLogLevelInTemplate(template string) string {
+	// Regular expression to find --v=<number> arguments
+	re := regexp.MustCompile(`--v=\d+`)
+
+	// template can contain different log levels, replace it with --v=5
+	return re.ReplaceAllString(template, "--v=5")
 }
 
 func enableReadAffinityInTemplate(template string) string {
