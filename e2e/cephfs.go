@@ -22,7 +22,7 @@ import (
 	"strings"
 	"sync"
 
-	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v7/apis/volumesnapshot/v1"
+	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	. "github.com/onsi/ginkgo/v2"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -2475,6 +2475,19 @@ var _ = Describe(cephfsType, func() {
 				err = deletePVCAndValidatePV(f.ClientSet, pvc, deployTimeout)
 				if err != nil {
 					framework.Failf("failed to delete PVC: %v", err)
+				}
+			})
+
+			By("test volumeGroupSnapshot", func() {
+				scName := "csi-cephfs-sc"
+				snapshotter, err := newCephFSVolumeGroupSnapshot(f, f.UniqueName, scName, false, deployTimeout, 3)
+				if err != nil {
+					framework.Failf("failed to create volumeGroupSnapshot Base: %v", err)
+				}
+
+				err = snapshotter.TestVolumeGroupSnapshot()
+				if err != nil {
+					framework.Failf("failed to test volumeGroupSnapshot: %v", err)
 				}
 			})
 
