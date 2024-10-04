@@ -1,16 +1,16 @@
 ---
-ShortName: cephcsi-rbd-rwo-test
+ShortName: cephcsi-rbd-test
 StorageClass:
-  FromExistingClassName: k8s-storage-e2e-rbd-rwo
+  FromExistingClassName: k8s-storage-e2e-rbd
   # FromFile: sc-rbd.yaml
 
 SnapshotClass:
   # Must be set to enable snapshotting tests
-  FromName: true
+  FromExistingClassName: k8s-storage-e2e-rbd
 
 DriverInfo:
   # Internal name of the driver, display name in the test case and test objects
-  Name: rbd-rwo.csi.ceph.com
+  Name: rbd.csi.ceph.com
 
   # The range of disk size supported by this driver
   SupportedSizeRange:
@@ -51,7 +51,7 @@ DriverInfo:
     volumeLimits: false
 
     # Support for volume expansion in controllers
-    controllerExpansion: false
+    controllerExpansion: true
 
     # Support for volume expansion in nodes
     nodeExpansion: true
@@ -66,7 +66,16 @@ DriverInfo:
     topology: false
 
     # Support populate data from snapshot
-    snapshotDataSource: false
+    snapshotDataSource: true
 
     # Support populated data from PVC
-    pvcDataSource: false
+    pvcDataSource: true
+
+    # multiple pods on a node can use the same volume concurrently
+    multipods: true
+
+    # support ReadWriteOncePod access mode
+    readWriteOncePod: true
+
+    # supports ROX AccessMode in PVC for PVC with Snapshot DataSource
+    capReadOnlyMany: true
