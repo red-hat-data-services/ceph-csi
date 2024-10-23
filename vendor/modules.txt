@@ -204,7 +204,7 @@ github.com/ceph/ceph-csi/api/deploy/kubernetes/cephfs
 github.com/ceph/ceph-csi/api/deploy/kubernetes/nfs
 github.com/ceph/ceph-csi/api/deploy/kubernetes/rbd
 github.com/ceph/ceph-csi/api/deploy/ocp
-# github.com/ceph/go-ceph v0.29.1-0.20240925141413-065319c78733
+# github.com/ceph/go-ceph v0.30.0
 ## explicit; go 1.19
 github.com/ceph/go-ceph/cephfs
 github.com/ceph/go-ceph/cephfs/admin
@@ -583,7 +583,7 @@ github.com/pkg/xattr
 # github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 ## explicit
 github.com/pmezard/go-difflib/difflib
-# github.com/prometheus/client_golang v1.20.4
+# github.com/prometheus/client_golang v1.20.5
 ## explicit; go 1.20
 github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil
 github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil/header
