@@ -4,11 +4,6 @@ ARG BASE_IMAGE
 
 FROM ${BASE_IMAGE} as updated_base
 
-# Since CentOS Stream 8 is EOL, update the config to use vault.centos.org for CentOS Stream 8
-# TODO: remove once https://github.com/ceph/ceph-csi/issues/4659 is fixed.
-RUN sed -i 's|^mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/*.repo && \
-    sed -i 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/*.repo
-
 # TODO: remove the following cmd, when issues
 # https://github.com/ceph/ceph-container/issues/2034
 # https://github.com/ceph/ceph-container/issues/2141 are fixed.
@@ -42,6 +37,9 @@ RUN source /build.env && \
 
 # test if the downloaded version of Golang works (different arch?)
 RUN ${GOROOT}/bin/go version && ${GOROOT}/bin/go env
+
+# other/conflicting versions of protobuf get installed as dependency
+RUN dnf -y remove protobuf
 
 RUN dnf -y install --nodocs \
 	librados-devel librbd-devel libcephfs-devel \
