@@ -21,23 +21,28 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-
-	"github.com/ceph/ceph-csi/internal/util"
 )
 
-type Snapshot interface {
+// VolumeGroupSnapshot provide functions to inspect and modify a
+// VolumeGroupSnapshot. The rbd.Manager can be used to create or otherwise
+// obtain a VolumeGroupSnapshot struct.
+type VolumeGroupSnapshot interface {
 	journalledObject
 
-	// Destroy frees the resources used by the Snapshot.
+	// Destroy frees the resources used by the VolumeGroupSnapshot.
 	Destroy(ctx context.Context)
 
-	// Delete removes the snapshot from the storage backend.
+	// Delete removes the VolumeGroupSnapshot from the storage backend.
 	Delete(ctx context.Context) error
 
-	ToCSI(ctx context.Context) (*csi.Snapshot, error)
+	// ToCSI returns the VolumeGroupSnapshot struct in CSI format.
+	ToCSI(ctx context.Context) (*csi.VolumeGroupSnapshot, error)
 
+	// GetCreationTime retrurns the time when the VolumeGroupSnapshot was
+	// created.
 	GetCreationTime(ctx context.Context) (*time.Time, error)
 
-	// SetVolumeGroup sets the CSI volume group ID in the snapshot.
-	SetVolumeGroup(ctx context.Context, creds *util.Credentials, vgID string) error
+	// ListSnapshots returns a slice with all Snapshots in the
+	// VolumeGroupSnapshot.
+	ListSnapshots(ctx context.Context) ([]Snapshot, error)
 }
