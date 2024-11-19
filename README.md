@@ -35,9 +35,9 @@ attaching them to workloads.
 Independent CSI plugins are provided to support RBD and CephFS backed volumes,
 
 - For details about configuration and deployment of RBD plugin, please refer
-  [rbd doc](https://github.com/ceph/ceph-csi/blob/devel/docs/deploy-rbd.md) and
+  [rbd doc](https://github.com/ceph/ceph-csi/blob/devel/docs/rbd/deploy.md) and
   for CephFS plugin configuration and deployment please
-  refer [cephFS doc](https://github.com/ceph/ceph-csi/blob/devel/docs/deploy-cephfs.md).
+  refer [cephFS doc](https://github.com/ceph/ceph-csi/blob/devel/docs/cephfs/deploy.md).
 - For example usage of the RBD and CephFS CSI plugins, see examples in `examples/`.
 - Stale resource cleanup, please refer [cleanup doc](docs/resource-cleanup.md).
 
@@ -75,7 +75,7 @@ Ceph CSI version, they will be asked to upgrade when requesting support.
 
 ### Ceph-CSI features and available versions
 
-Please refer [rbd nbd mounter](./docs/rbd-nbd.md#support-matrix)
+Please refer [rbd nbd mounter](./docs/design/proposals/rbd-nbd.md#support-matrix)
 for its support details.
 
 | Plugin | Features                                                  | Feature Status | CSI Driver Version | CSI Spec Version | Ceph Cluster Version | Kubernetes Version |
