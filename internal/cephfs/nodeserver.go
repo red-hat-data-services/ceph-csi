@@ -462,16 +462,7 @@ func (ns *NodeServer) NodePublishVolume(
 	volOptions := &store.VolumeOptions{}
 	defer volOptions.Destroy()
 
-	if err := volOptions.DetectMounter(req.GetVolumeContext()); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to detect mounter for volume %s: %v", volID, err.Error())
-	}
-
-	volMounter, err := mounter.New(volOptions)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create mounter for volume %s: %v", volID, err.Error())
-	}
-
-	if err = util.CreateMountPoint(targetPath); err != nil {
+	if err := util.CreateMountPoint(targetPath); err != nil {
 		log.ErrorLog(ctx, "failed to create mount point at %s: %v", targetPath, err)
 
 		return nil, status.Error(codes.Internal, err.Error())
@@ -559,17 +550,6 @@ func (ns *NodeServer) NodeUnpublishVolume(
 	}
 
 	targetPath := req.GetTargetPath()
-	volID := req.GetVolumeId()
-	if acquired := ns.VolumeLocks.TryAcquire(targetPath); !acquired {
-		log.ErrorLog(ctx, util.TargetPathOperationAlreadyExistsFmt, targetPath)
-
-		return nil, status.Errorf(codes.Aborted, util.TargetPathOperationAlreadyExistsFmt, targetPath)
-	}
-	defer ns.VolumeLocks.Release(targetPath)
-
-	// stop the health-checker that may have been started in NodeGetVolumeStats()
-	ns.healthChecker.StopChecker(volID, targetPath)
-
 	isMnt, err := util.IsMountPoint(ns.Mounter, targetPath)
 	if err != nil {
 		log.ErrorLog(ctx, "stat failed: %v", err)
