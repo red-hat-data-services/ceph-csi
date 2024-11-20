@@ -101,7 +101,7 @@ parameters:
    # By default host-path /var/log/ceph of node is bind-mounted into
    # csi-rbdplugin pod at /var/log/ceph mount path. This is to configure
    # target bindmount path used inside container for ceph clients logging.
-   # See docs/rbd-nbd.md for available configuration options.
+   # See docs/design/proposals/rbd-nbd.md for available configuration options.
    # cephLogDir: /var/log/ceph
 
    # (optional) ceph client log strategy
