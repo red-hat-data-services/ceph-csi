@@ -937,7 +937,7 @@ func (ns *NodeServer) NodeUnpublishVolume(
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 	if !isMnt {
-		if err = os.RemoveAll(targetPath); err != nil {
+		if err = os.Remove(targetPath); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
@@ -948,7 +948,7 @@ func (ns *NodeServer) NodeUnpublishVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if err = os.RemoveAll(targetPath); err != nil {
+	if err = os.Remove(targetPath); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
