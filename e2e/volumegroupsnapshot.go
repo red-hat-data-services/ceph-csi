@@ -34,9 +34,10 @@ var _ VolumeGroupSnapshotter = &cephFSVolumeGroupSnapshot{}
 func newCephFSVolumeGroupSnapshot(f *framework.Framework, namespace,
 	storageClass string,
 	blockPVC bool,
-	timeout, totalPVCCount int,
+	timeout, totalPVCCount, additionalVGSnapshotCount int,
 ) (VolumeGroupSnapshotter, error) {
-	base, err := newVolumeGroupSnapshotBase(f, namespace, storageClass, blockPVC, timeout, totalPVCCount)
+	base, err := newVolumeGroupSnapshotBase(f, namespace, storageClass, blockPVC,
+		timeout, totalPVCCount, additionalVGSnapshotCount)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create volumeGroupSnapshotterBase: %w", err)
 	}
@@ -127,9 +128,10 @@ var _ VolumeGroupSnapshotter = &rbdVolumeGroupSnapshot{}
 func newRBDVolumeGroupSnapshot(f *framework.Framework, namespace,
 	storageClass string,
 	blockPVC bool,
-	timeout, totalPVCCount int,
+	timeout, totalPVCCount, additionalVGSnapshotCount int,
 ) (VolumeGroupSnapshotter, error) {
-	base, err := newVolumeGroupSnapshotBase(f, namespace, storageClass, blockPVC, timeout, totalPVCCount)
+	base, err := newVolumeGroupSnapshotBase(f, namespace, storageClass, blockPVC,
+		timeout, totalPVCCount, additionalVGSnapshotCount)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create volumeGroupSnapshotterBase: %w", err)
 	}

@@ -73,19 +73,20 @@ type VolumeGroupSnapshotter interface {
 }
 
 type volumeGroupSnapshotterBase struct {
-	timeout          int
-	framework        *framework.Framework
-	groupclient      *groupsnapclient.GroupsnapshotV1alpha1Client
-	storageClassName string
-	blockPVC         bool
-	totalPVCCount    int
-	namespace        string
+	timeout                   int
+	framework                 *framework.Framework
+	groupclient               *groupsnapclient.GroupsnapshotV1alpha1Client
+	storageClassName          string
+	blockPVC                  bool
+	totalPVCCount             int
+	additionalVGSnapshotCount int
+	namespace                 string
 }
 
 func newVolumeGroupSnapshotBase(f *framework.Framework, namespace,
 	storageClass string,
 	blockPVC bool,
-	timeout, totalPVCCount int,
+	timeout, totalPVCCount, additionalVGSnapshotCount int,
 ) (*volumeGroupSnapshotterBase, error) {
 	config, err := framework.LoadConfig()
 	if err != nil {
@@ -97,13 +98,14 @@ func newVolumeGroupSnapshotBase(f *framework.Framework, namespace,
 	}
 
 	return &volumeGroupSnapshotterBase{
-		framework:        f,
-		groupclient:      c,
-		namespace:        namespace,
-		storageClassName: storageClass,
-		blockPVC:         blockPVC,
-		timeout:          timeout,
-		totalPVCCount:    totalPVCCount,
+		framework:                 f,
+		groupclient:               c,
+		namespace:                 namespace,
+		storageClassName:          storageClass,
+		blockPVC:                  blockPVC,
+		timeout:                   timeout,
+		totalPVCCount:             totalPVCCount,
+		additionalVGSnapshotCount: additionalVGSnapshotCount,
 	}, err
 }
 
@@ -263,7 +265,7 @@ func (v *volumeGroupSnapshotterBase) DeletePods(pods []*v1.Pod) error {
 	return nil
 }
 
-func (v volumeGroupSnapshotterBase) CreateVolumeGroupSnapshotClass(
+func (v *volumeGroupSnapshotterBase) CreateVolumeGroupSnapshotClass(
 	groupSnapshotClass *groupsnapapi.VolumeGroupSnapshotClass,
 ) error {
 	return wait.PollUntilContextTimeout(
@@ -286,7 +288,7 @@ func (v volumeGroupSnapshotterBase) CreateVolumeGroupSnapshotClass(
 		})
 }
 
-func (v volumeGroupSnapshotterBase) CreateVolumeGroupSnapshot(name,
+func (v *volumeGroupSnapshotterBase) CreateVolumeGroupSnapshot(name,
 	volumeGroupSnapshotClassName string, labels map[string]string,
 ) (*groupsnapapi.VolumeGroupSnapshot, error) {
 	namespace := v.namespace
@@ -356,7 +358,7 @@ func (v volumeGroupSnapshotterBase) CreateVolumeGroupSnapshot(name,
 	return groupSnapshot, nil
 }
 
-func (v volumeGroupSnapshotterBase) DeleteVolumeGroupSnapshot(volumeGroupSnapshotName string) error {
+func (v *volumeGroupSnapshotterBase) DeleteVolumeGroupSnapshot(volumeGroupSnapshotName string) error {
 	namespace := v.namespace
 	ctx := context.TODO()
 	err := v.groupclient.VolumeGroupSnapshots(namespace).Delete(
@@ -395,7 +397,7 @@ func (v volumeGroupSnapshotterBase) DeleteVolumeGroupSnapshot(volumeGroupSnapsho
 		})
 }
 
-func (v volumeGroupSnapshotterBase) DeleteVolumeGroupSnapshotClass(groupSnapshotClassName string) error {
+func (v *volumeGroupSnapshotterBase) DeleteVolumeGroupSnapshotClass(groupSnapshotClassName string) error {
 	ctx := context.TODO()
 	err := v.groupclient.VolumeGroupSnapshotClasses().Delete(
 		ctx, groupSnapshotClassName, metav1.DeleteOptions{})
@@ -454,6 +456,22 @@ func (v *volumeGroupSnapshotterBase) testVolumeGroupSnapshot(vol VolumeGroupSnap
 	volumeGroupSnapshot, err := v.CreateVolumeGroupSnapshot(vgsName, vgscName, pvcLabels)
 	if err != nil {
 		return fmt.Errorf("failed to create volume group snapshot: %w", err)
+	}
+
+	// Create and delete additional group snapshots.
+	for i := range v.additionalVGSnapshotCount {
+		newVGSName := fmt.Sprintf("%s-%d", vgsName, i)
+		_, err = v.CreateVolumeGroupSnapshot(newVGSName, vgscName, pvcLabels)
+		if err != nil {
+			return fmt.Errorf("failed to create volume group snapshot %q: %w", newVGSName, err)
+		}
+	}
+	for i := range v.additionalVGSnapshotCount {
+		newVGSName := fmt.Sprintf("%s-%d", vgsName, i)
+		err = v.DeleteVolumeGroupSnapshot(newVGSName)
+		if err != nil {
+			return fmt.Errorf("failed to delete volume group snapshot %q: %w", newVGSName, err)
+		}
 	}
 
 	clonePVCs, err := v.CreatePVCClones(volumeGroupSnapshot)
