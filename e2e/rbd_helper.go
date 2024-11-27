@@ -1093,27 +1093,38 @@ type imageInfo struct {
 
 // getImageInfo queries rbd about the given image and returns its metadata, and returns
 // error if provided image is not found.
-func getImageInfo(f *framework.Framework, imageName, poolName string) (imageInfo, error) {
+func getImageInfo(f *framework.Framework, imageName, poolName string) (string, error) {
 	// rbd --format=json info [image-spec | snap-spec]
-	var imgInfo imageInfo
-
 	stdOut, stdErr, err := execCommandInToolBoxPod(
 		f,
 		fmt.Sprintf("rbd info %s %s --format json", rbdOptions(poolName), imageName),
 		rookNamespace)
 	if err != nil {
-		return imgInfo, fmt.Errorf("failed to get rbd info: %w", err)
+		return stdOut, fmt.Errorf("failed to get rbd info: %w", err)
 	}
 	if stdErr != "" {
-		return imgInfo, fmt.Errorf("failed to get rbd info: %v", stdErr)
-	}
-	err = json.Unmarshal([]byte(stdOut), &imgInfo)
-	if err != nil {
-		return imgInfo, fmt.Errorf("unmarshal failed: %w. raw buffer response: %s",
-			err, stdOut)
+		return stdOut, fmt.Errorf("failed to get rbd info: %v", stdErr)
 	}
 
-	return imgInfo, nil
+	return stdOut, nil
+}
+
+// getImageStatus queries rbd about the given image and returns its metadata, and returns
+// error if provided image is not found.
+func getImageStatus(f *framework.Framework, imageName, poolName string) (string, error) {
+	// rbd --format=json status [image-spec | snap-spec]
+	stdOut, stdErr, err := execCommandInToolBoxPod(
+		f,
+		fmt.Sprintf("rbd status %s %s --format json", rbdOptions(poolName), imageName),
+		rookNamespace)
+	if err != nil {
+		return stdOut, fmt.Errorf("error retrieving rbd status: %w", err)
+	}
+	if stdErr != "" {
+		return stdOut, fmt.Errorf("failed to get rbd info: %v", stdErr)
+	}
+
+	return stdOut, nil
 }
 
 // validateStripe validate the stripe count, stripe unit and object size of the
@@ -1124,14 +1135,21 @@ func validateStripe(f *framework.Framework,
 	stripeCount,
 	objectSize int,
 ) error {
+	var imgInfo imageInfo
+
 	imageData, err := getImageInfoFromPVC(pvc.Namespace, pvc.Name, f)
 	if err != nil {
 		return err
 	}
 
-	imgInfo, err := getImageInfo(f, imageData.imageName, defaultRBDPool)
+	imgInfoStr, err := getImageInfo(f, imageData.imageName, defaultRBDPool)
 	if err != nil {
 		return err
+	}
+
+	err = json.Unmarshal([]byte(imgInfoStr), &imgInfo)
+	if err != nil {
+		return fmt.Errorf("unmarshal failed: %w. raw buffer response: %s", err, imgInfoStr)
 	}
 
 	if imgInfo.ObjectSize != objectSize {

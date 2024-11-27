@@ -189,12 +189,27 @@ func validateRBDImageCount(f *framework.Framework, count int, pool string) {
 		framework.Failf("failed to list rbd images: %v", err)
 	}
 	if len(imageList) != count {
+		var imageDetails []string // To collect details for all images
+		for _, image := range imageList {
+			imgInfoStr, err := getImageInfo(f, image, pool)
+			if err != nil {
+				framework.Logf("Error getting image info: %v", err)
+			}
+			imgStatusOutput, err := getImageStatus(f, image, pool)
+			if err != nil {
+				framework.Logf("Error getting image status: %v", err)
+			}
+			// Collecting image details for printing
+			imageDetails = append(imageDetails, fmt.Sprintf(
+				"Pool: %s, Image: %s, Info: %s, Status: %s", pool, image, imgInfoStr, imgStatusOutput))
+		}
 		framework.Failf(
 			"backend images not matching kubernetes resource count,image count %d kubernetes resource count %d"+
-				"\nbackend image Info:\n %v",
+				"\nbackend image Info:\n %v\n images information and status %v",
 			len(imageList),
 			count,
-			imageList)
+			imageList,
+			strings.Join(imageDetails, "\n"))
 	}
 }
 
