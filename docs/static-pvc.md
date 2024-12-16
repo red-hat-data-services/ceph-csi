@@ -7,31 +7,35 @@
       - [RBD Volume Attributes in PV](#rbd-volume-attributes-in-pv)
       - [Create RBD static PVC](#create-rbd-static-pvc)
       - [Resize RBD image](#resize-rbd-image)
+      - [Verify RBD static PVC](#verify-rbd-static-pvc)
    - [CephFS static PVC](#cephfs-static-pvc)
       - [Create CephFS subvolume](#create-cephfs-subvolume)
       - [Create CephFS static PV](#create-cephfs-static-pv)
       - [Node stage secret ref in CephFS PV](#node-stage-secret-ref-in-cephfs-pv)
       - [CephFS volume attributes in PV](#cephfs-volume-attributes-in-pv)
       - [Create CephFS static PVC](#create-cephfs-static-pvc)
+      - [Verify CephFS static PVC](#verify-cephfs-static-pvc)
 
 This document outlines how to create static PV and static PVC from
-existing rbd image/cephFS volume.
+existing RBD image or CephFS volume.
 
-**warning** static PVC can be created, deleted, mounted and unmounted but
+> [!warning]
+> static PVC can be created, deleted, mounted and unmounted but
 currently ceph-csi doesn't support other operations like snapshot,clone,
 resize, etc for static PVC
 
 ## RBD static PVC
 
 RBD images created manually can be mounted and unmounted to an app, below step
-shows how to create a rbd image, static PV, static PVC
+shows how to create a RBD image, static PV, static PVC
 
 ### Create RBD image
 
-If you already have a rbd image created and contains some data which you want
+> [!tip]
+> If you already have a RBD image created and contains some data which you want
 to access by the application pod you can skip this step.
 
-Lets create a new rbd image in ceph cluster which we are going to use for
+Let's create a new RBD image in ceph cluster which we are going to use for
 static PVC
 
 ```console
@@ -40,8 +44,8 @@ rbd create static-image --size=1024 --pool=replicapool
 
 ### Create RBD static PV
 
-To create the rbd PV you need to know the `rbd image name`,`clusterID` and
-`pool` name in which the rbd image is created
+To create the RBD PV you need to know the `rbd image name`,`clusterID` and
+`pool` name in which the RBD image is created
 
 ```yaml
 apiVersion: v1
@@ -83,12 +87,13 @@ static RBD PV
 |  Attributes   |                                                                     Description                                                                      | Required |
 | :-----------: | :--------------------------------------------------------------------------------------------------------------------------------------------------: | :------: |
 |   clusterID   | The clusterID is used by the CSI plugin to uniquely identify and use a Ceph cluster (this is the key in configmap created duing ceph-csi deployment) |   Yes    |
-|     pool      |                                                     The pool name in which rbd image is created                                                      |   Yes    |
-| staticVolume  |                                           Value must be set to `true` to mount and unmount static rbd PVC                                            |   Yes    |
+|     pool      |                                                     The pool name in which RBD image is created                                                      |   Yes    |
+| staticVolume  |                                           Value must be set to `true` to mount and unmount static RBD PVC                                            |   Yes    |
 | imageFeatures |       CSI RBD currently supports `layering, journaling, exclusive-lock` features. If `journaling` is enabled, must enable `exclusive-lock` too       |   Yes    |
-|    mounter    |                      If set to `rbd-nbd`, use `rbd-nbd` on nodes that have `rbd-nbd` and `nbd` kernel modules to map rbd images                      |    No    |
+|    mounter    |                      If set to `rbd-nbd`, use `rbd-nbd` on nodes that have `rbd-nbd` and `nbd` kernel modules to map RBD images                      |    No    |
 
-**Note** ceph-csi does not supports rbd image deletion for static PV.
+> [!note]
+> ceph-csi does not supports RBD image deletion for static PV.
 `persistentVolumeReclaimPolicy` in PV spec must be set to `Retain` to avoid PV
 delete attempt in csi-provisioner.
 
@@ -99,7 +104,7 @@ persistentvolume/fs-static-pv created
 
 ### Create RBD static PVC
 
-To create the rbd PVC you need to know the PV name which is created above
+To create the RBD PVC you need to know the PV name which is created above
 
 ```yaml
 apiVersion: v1
@@ -134,32 +139,78 @@ Let us resize the RBD image in ceph cluster
 rbd resize static-image --size=2048 --pool=replicapool
 ```
 
-Once the rbd image is resized in the ceph cluster, update the PV size and PVC
-size to match the size of the rbd image.
+Once the RBD image is resized in the ceph cluster, update the PV size and PVC
+size to match the size of the RBD image.
 
 Now scale down the application pod which is using `cephfs-static-pvc` and scale
 up the application pod to resize the filesystem.
 
-**Note** If you have mounted same static PVC to multiple application pods, make
+> [!note]
+> If you have mounted same static PVC to multiple application pods, make
 sure you will scale down all the application pods and make sure no application
 pods using the static PVC is running on the node and scale up all the
 application pods again(this will trigger `NodeStageVolumeRequest` which will
 resize the filesystem for static volume).
 
-**Note** deleting PV and PVC does not removed the backend rbd image, user need to
-manually delete the rbd image if required
+### Verify RBD static PVC
+
+We can verify the RBD static PVC by creating a Pod that mounts the PVC.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rbd-static-pvc-test
+  namespace: default
+spec:
+  containers:
+    - name: busybox
+      image: busybox:latest
+      volumeMounts:
+        - name: static-pvc
+          mountPath: /data/pvc
+      command: ["sleep", "3600"]
+  volumes:
+    - name: static-pvc
+      persistentVolumeClaim:
+        claimName: fs-static-pvc
+```
+
+```bash
+$ kubectl create -f rbd-static-pvc-test.yaml
+pod/rbd-static-pvc-test created
+```
+
+Verify that the PVC has been successfully mounted.
+
+```bash
+kubectl exec rbd-static-pvc-test -- df -h /data/pvc
+```
+
+Once you have completed the verification step, you can delete the test Pod for RBD.
+
+```bash
+$ kubectl delete pod rbd-static-pvc-test
+pod "rbd-static-pvc-test" deleted
+```
+
+> [!note]
+> deleting PV and PVC does not removed the backend RBD image, user need to
+manually delete the RBD image if required
 
 ## CephFS static PVC
 
-CephFS subvolume created manually can be mounted and unmounted to an app,
-below steps show how to create a CephFS subvolume, static PV and static PVC.
+CephFS subvolume or volume created manually can be mounted and unmounted
+to an app, below steps show how to create a CephFS subvolume or volume,
+static PV and static PVC.
 
 ### Create CephFS subvolume
 
-If you already have a CephFS subvolume created and contains some data
-which you want to access by the application pod you can skip this step.
+> [!tip]
+> If you already have a CephFS subvolume or volume created and contains some data
+which you want to access by the application pod, you can skip this step.
 
-Lets create a new CephFS subvolume of size 1 GiB in ceph cluster which
+Let's create a new CephFS subvolume of size 1 GiB in ceph cluster which
 we are going to use for static PVC, before that we need to create
 the subvolumegroup. **myfs** is the filesystem name(volume name) inside
 which subvolume should be created.
@@ -172,17 +223,21 @@ ceph fs subvolumegroup create myfs testGroup
 ceph fs subvolume create myfs testSubVolume testGroup --size=1073741824
 ```
 
-**Note:** volume here refers to the filesystem.
+> [!note]
+> volume here refers to the filesystem.
 
 ### Create CephFS static PV
 
 To create the CephFS PV you need to know the `volume rootpath`, and `clusterID`,
-here is the command to get the root path in ceph cluster
+here is the command to get the root path of subvolume in ceph cluster
 
 ```bash
 $ ceph fs subvolume getpath myfs testSubVolume testGroup
 /volumes/testGroup/testSubVolume
 ```
+
+For volume, you can directly use the folder path relative to the
+filesystem as the `rootpath`.
 
 ```yaml
 apiVersion: v1
@@ -231,7 +286,7 @@ static CephFS PV
 |  clusterID   | The clusterID is used by the CSI plugin to uniquely identify and use a Ceph cluster (this is the key in configmap created duing ceph-csi deployment) |   Yes    |
 |    fsName    |                                      CephFS filesystem name to be mounted. Not passing this option mounts the default file system.                                       |   No    |
 | staticVolume |                                           Value must be set to `true` to mount and unmount static cephFS PVC                                         |   Yes    |
-|   rootPath   |                     Actual path of the subvolume in ceph cluster, can be retrieved by issuing getpath command as described above                     |   Yes    |
+|   rootPath   |                     Actual path of the subvolume in ceph cluster which can be retrieved by issuing getpath command as described above, or folder path of the volume                    |   Yes    |
 
 **Note** ceph-csi does not supports CephFS subvolume deletion for static PV.
 `persistentVolumeReclaimPolicy` in PV spec must be set to `Retain` to avoid PV
@@ -269,5 +324,49 @@ $ kubectl create -f cephfs-static-pvc.yaml
 persistentvolumeclaim/cephfs-static-pvc created
 ```
 
-**Note** deleting PV and PVC does not delete the backend CephFS subvolume,
-user needs to manually delete the CephFS subvolume if required.
+### Verify CephFS static PVC
+
+We can verify the CephFS static PVC by creating a Pod that mounts the PVC.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cephfs-static-pvc-test
+  namespace: default
+spec:
+  containers:
+    - name: busybox
+      image: busybox:latest
+      volumeMounts:
+        - name: static-pvc
+          mountPath: /data/pvc
+      command: ["sleep", "3600"]
+  volumes:
+    - name: static-pvc
+      persistentVolumeClaim:
+        claimName: cephfs-static-pvc
+        readOnly: false
+```
+
+```bash
+$ kubectl create -f cephfs-static-pvc-test.yaml
+pod/cephfs-static-pvc-test created
+```
+
+Verify that the PVC has been successfully mounted.
+
+```bash
+kubectl exec cephfs-static-pvc-test -- df -h /data/pvc
+```
+
+Once you have completed the verification step, you can delete the test Pod for CephFS.
+
+```bash
+$ kubectl delete pod cephfs-static-pvc-test
+pod "cephfs-static-pvc-test" deleted
+```
+
+> [!note]
+> deleting PV and PVC does not delete the backend CephFS subvolume or volume,
+user needs to manually delete the CephFS subvolume or volume if required.
