@@ -448,8 +448,15 @@ func (ns *NodeServer) NodePublishVolume(
 	targetPath := req.GetTargetPath()
 	volID := fsutil.VolumeID(req.GetVolumeId())
 
-	// Considering kubelet make sure the stage and publish operations
-	// are serialized, we dont need any extra locking in nodePublish
+	if acquired := ns.VolumeLocks.TryAcquire(targetPath); !acquired {
+		log.ErrorLog(ctx, util.TargetPathOperationAlreadyExistsFmt, targetPath)
+
+		return nil, status.Errorf(codes.Aborted, util.TargetPathOperationAlreadyExistsFmt, targetPath)
+	}
+	defer ns.VolumeLocks.Release(targetPath)
+
+	volOptions := &store.VolumeOptions{}
+	defer volOptions.Destroy()
 
 	if err := util.CreateMountPoint(targetPath); err != nil {
 		log.ErrorLog(ctx, "failed to create mount point at %s: %v", targetPath, err)
@@ -539,12 +546,17 @@ func (ns *NodeServer) NodeUnpublishVolume(
 		return nil, err
 	}
 
-	// considering kubelet make sure node operations like unpublish/unstage...etc can not be called
-	// at same time, an explicit locking at time of nodeunpublish is not required.
 	targetPath := req.GetTargetPath()
+	volID := req.GetVolumeId()
+	if acquired := ns.VolumeLocks.TryAcquire(targetPath); !acquired {
+		log.ErrorLog(ctx, util.TargetPathOperationAlreadyExistsFmt, targetPath)
+
+		return nil, status.Errorf(codes.Aborted, util.TargetPathOperationAlreadyExistsFmt, targetPath)
+	}
+	defer ns.VolumeLocks.Release(targetPath)
 
 	// stop the health-checker that may have been started in NodeGetVolumeStats()
-	ns.healthChecker.StopChecker(req.GetVolumeId(), targetPath)
+	ns.healthChecker.StopChecker(volID, targetPath)
 
 	isMnt, err := util.IsMountPoint(ns.Mounter, targetPath)
 	if err != nil {
@@ -567,7 +579,7 @@ func (ns *NodeServer) NodeUnpublishVolume(
 		isMnt = true
 	}
 	if !isMnt {
-		if err = os.RemoveAll(targetPath); err != nil {
+		if err = os.Remove(targetPath); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
