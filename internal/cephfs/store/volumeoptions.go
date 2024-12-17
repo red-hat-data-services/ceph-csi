@@ -151,8 +151,8 @@ func validateMounter(m string) error {
 	return nil
 }
 
-func (v *VolumeOptions) DetectMounter(options map[string]string) error {
-	return extractMounter(&v.Mounter, options)
+func (vo *VolumeOptions) DetectMounter(options map[string]string) error {
+	return extractMounter(&vo.Mounter, options)
 }
 
 func extractMounter(dest *string, options map[string]string) error {
