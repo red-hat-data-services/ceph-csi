@@ -18,12 +18,14 @@ package e2e
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"time"
 
-	groupsnapapi "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1alpha1"
+	groupsnapapi "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
-	groupsnapclient "github.com/kubernetes-csi/external-snapshotter/client/v8/clientset/versioned/typed/volumegroupsnapshot/v1alpha1"
+	groupsnapclient "github.com/kubernetes-csi/external-snapshotter/client/v8/clientset/versioned/typed/volumegroupsnapshot/v1beta1"
+	snapclient "github.com/kubernetes-csi/external-snapshotter/client/v8/clientset/versioned/typed/volumesnapshot/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -73,19 +75,21 @@ type VolumeGroupSnapshotter interface {
 }
 
 type volumeGroupSnapshotterBase struct {
-	timeout          int
-	framework        *framework.Framework
-	groupclient      *groupsnapclient.GroupsnapshotV1alpha1Client
-	storageClassName string
-	blockPVC         bool
-	totalPVCCount    int
-	namespace        string
+	timeout                   int
+	framework                 *framework.Framework
+	groupclient               *groupsnapclient.GroupsnapshotV1beta1Client
+	snapClient                *snapclient.SnapshotV1Client
+	storageClassName          string
+	blockPVC                  bool
+	totalPVCCount             int
+	additionalVGSnapshotCount int
+	namespace                 string
 }
 
 func newVolumeGroupSnapshotBase(f *framework.Framework, namespace,
 	storageClass string,
 	blockPVC bool,
-	timeout, totalPVCCount int,
+	timeout, totalPVCCount, additionalVGSnapshotCount int,
 ) (*volumeGroupSnapshotterBase, error) {
 	config, err := framework.LoadConfig()
 	if err != nil {
@@ -96,14 +100,21 @@ func newVolumeGroupSnapshotBase(f *framework.Framework, namespace,
 		return nil, fmt.Errorf("error creating group snapshot client: %w", err)
 	}
 
+	s, err := snapclient.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("error creating snapshot client: %w", err)
+	}
+
 	return &volumeGroupSnapshotterBase{
-		framework:        f,
-		groupclient:      c,
-		namespace:        namespace,
-		storageClassName: storageClass,
-		blockPVC:         blockPVC,
-		timeout:          timeout,
-		totalPVCCount:    totalPVCCount,
+		framework:                 f,
+		groupclient:               c,
+		snapClient:                s,
+		namespace:                 namespace,
+		storageClassName:          storageClass,
+		blockPVC:                  blockPVC,
+		timeout:                   timeout,
+		totalPVCCount:             totalPVCCount,
+		additionalVGSnapshotCount: additionalVGSnapshotCount,
 	}, err
 }
 
@@ -160,13 +171,27 @@ func (v *volumeGroupSnapshotterBase) DeletePVCs(pvcs []*v1.PersistentVolumeClaim
 func (v *volumeGroupSnapshotterBase) CreatePVCClones(
 	vgs *groupsnapapi.VolumeGroupSnapshot,
 ) ([]*v1.PersistentVolumeClaim, error) {
-	pvcSnapRef := vgs.Status.PVCVolumeSnapshotRefList
+	groupSnapshotContent, err := v.groupclient.VolumeGroupSnapshotContents().Get(
+		context.TODO(),
+		*vgs.Status.BoundVolumeGroupSnapshotContentName,
+		metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VolumeGroupSnapshotContent: %w", err)
+	}
 	namespace := vgs.Namespace
 	ctx := context.TODO()
-	pvcs := make([]*v1.PersistentVolumeClaim, len(pvcSnapRef))
-	for i, pvcSnap := range pvcSnapRef {
+	pvcs := make([]*v1.PersistentVolumeClaim, len(groupSnapshotContent.Status.VolumeSnapshotHandlePairList))
+	for i, snapshot := range groupSnapshotContent.Status.VolumeSnapshotHandlePairList {
+		volumeHandle := snapshot.VolumeHandle
+		volumeSnapshotName := fmt.Sprintf("snapshot-%x", sha256.Sum256([]byte(
+			string(groupSnapshotContent.UID)+volumeHandle)))
+		volumeSnapshot, err := v.snapClient.VolumeSnapshots(namespace).Get(ctx, volumeSnapshotName, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get VolumeSnapshot: %w", err)
+		}
+		pvcName := *volumeSnapshot.Spec.Source.PersistentVolumeClaimName
 		pvc, err := v.framework.ClientSet.CoreV1().PersistentVolumeClaims(namespace).Get(ctx,
-			pvcSnap.PersistentVolumeClaimRef.Name,
+			pvcName,
 			metav1.GetOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to get PVC: %w", err)
@@ -179,12 +204,11 @@ func (v *volumeGroupSnapshotterBase) CreatePVCClones(
 			Spec: *pvc.Spec.DeepCopy(),
 		}
 
-		snap := pvcSnap.VolumeSnapshotRef
 		apiGroup := snapapi.GroupName
 		pvcs[i].Spec.DataSource = &v1.TypedLocalObjectReference{
 			APIGroup: &apiGroup,
 			Kind:     "VolumeSnapshot",
-			Name:     snap.Name,
+			Name:     volumeSnapshot.Name,
 		}
 		pvcs[i].Spec.StorageClassName = &v.storageClassName
 		// cleanup the VolumeName as we are creating a new PVC
@@ -263,7 +287,7 @@ func (v *volumeGroupSnapshotterBase) DeletePods(pods []*v1.Pod) error {
 	return nil
 }
 
-func (v volumeGroupSnapshotterBase) CreateVolumeGroupSnapshotClass(
+func (v *volumeGroupSnapshotterBase) CreateVolumeGroupSnapshotClass(
 	groupSnapshotClass *groupsnapapi.VolumeGroupSnapshotClass,
 ) error {
 	return wait.PollUntilContextTimeout(
@@ -286,7 +310,7 @@ func (v volumeGroupSnapshotterBase) CreateVolumeGroupSnapshotClass(
 		})
 }
 
-func (v volumeGroupSnapshotterBase) CreateVolumeGroupSnapshot(name,
+func (v *volumeGroupSnapshotterBase) CreateVolumeGroupSnapshot(name,
 	volumeGroupSnapshotClassName string, labels map[string]string,
 ) (*groupsnapapi.VolumeGroupSnapshot, error) {
 	namespace := v.namespace
@@ -356,7 +380,7 @@ func (v volumeGroupSnapshotterBase) CreateVolumeGroupSnapshot(name,
 	return groupSnapshot, nil
 }
 
-func (v volumeGroupSnapshotterBase) DeleteVolumeGroupSnapshot(volumeGroupSnapshotName string) error {
+func (v *volumeGroupSnapshotterBase) DeleteVolumeGroupSnapshot(volumeGroupSnapshotName string) error {
 	namespace := v.namespace
 	ctx := context.TODO()
 	err := v.groupclient.VolumeGroupSnapshots(namespace).Delete(
@@ -395,7 +419,7 @@ func (v volumeGroupSnapshotterBase) DeleteVolumeGroupSnapshot(volumeGroupSnapsho
 		})
 }
 
-func (v volumeGroupSnapshotterBase) DeleteVolumeGroupSnapshotClass(groupSnapshotClassName string) error {
+func (v *volumeGroupSnapshotterBase) DeleteVolumeGroupSnapshotClass(groupSnapshotClassName string) error {
 	ctx := context.TODO()
 	err := v.groupclient.VolumeGroupSnapshotClasses().Delete(
 		ctx, groupSnapshotClassName, metav1.DeleteOptions{})
@@ -454,6 +478,22 @@ func (v *volumeGroupSnapshotterBase) testVolumeGroupSnapshot(vol VolumeGroupSnap
 	volumeGroupSnapshot, err := v.CreateVolumeGroupSnapshot(vgsName, vgscName, pvcLabels)
 	if err != nil {
 		return fmt.Errorf("failed to create volume group snapshot: %w", err)
+	}
+
+	// Create and delete additional group snapshots.
+	for i := range v.additionalVGSnapshotCount {
+		newVGSName := fmt.Sprintf("%s-%d", vgsName, i)
+		_, err = v.CreateVolumeGroupSnapshot(newVGSName, vgscName, pvcLabels)
+		if err != nil {
+			return fmt.Errorf("failed to create volume group snapshot %q: %w", newVGSName, err)
+		}
+	}
+	for i := range v.additionalVGSnapshotCount {
+		newVGSName := fmt.Sprintf("%s-%d", vgsName, i)
+		err = v.DeleteVolumeGroupSnapshot(newVGSName)
+		if err != nil {
+			return fmt.Errorf("failed to delete volume group snapshot %q: %w", newVGSName, err)
+		}
 	}
 
 	clonePVCs, err := v.CreatePVCClones(volumeGroupSnapshot)
