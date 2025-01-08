@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go v1.55.5
 	github.com/aws/aws-sdk-go-v2/service/sts v1.33.2
 	github.com/ceph/ceph-csi/api v0.0.0-00010101000000-000000000000
-	github.com/ceph/go-ceph v0.30.1-0.20241102143109-75d1af3ed638
+	github.com/ceph/go-ceph v0.31.0
 	github.com/container-storage-interface/spec v1.11.0
 	github.com/csi-addons/spec v0.2.1-0.20241104111131-27825f744db5
 	github.com/gemalto/kmip-go v0.0.10
@@ -28,7 +28,7 @@ require (
 	golang.org/x/crypto v0.31.0
 	golang.org/x/net v0.32.0
 	golang.org/x/sys v0.28.0
-	google.golang.org/grpc v1.69.0
+	google.golang.org/grpc v1.69.2
 	google.golang.org/protobuf v1.36.0
 	//
 	// when updating k8s.io/kubernetes, make sure to update the replace section too
