@@ -1,6 +1,6 @@
 module github.com/ceph/ceph-csi
 
-go 1.22.7
+go 1.23.0
 
 require (
 	github.com/IBM/keyprotect-go-client v0.15.1
@@ -29,7 +29,7 @@ require (
 	golang.org/x/net v0.32.0
 	golang.org/x/sys v0.28.0
 	google.golang.org/grpc v1.69.2
-	google.golang.org/protobuf v1.36.0
+	google.golang.org/protobuf v1.36.2
 	//
 	// when updating k8s.io/kubernetes, make sure to update the replace section too
 	//
