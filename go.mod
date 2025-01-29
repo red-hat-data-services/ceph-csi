@@ -29,7 +29,7 @@ require (
 	golang.org/x/net v0.34.0
 	golang.org/x/sys v0.29.0
 	google.golang.org/grpc v1.69.4
-	google.golang.org/protobuf v1.36.3
+	google.golang.org/protobuf v1.36.4
 	//
 	// when updating k8s.io/kubernetes, make sure to update the replace section too
 	//
@@ -48,6 +48,7 @@ require (
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.8.0
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets v1.3.0
+	github.com/csi-addons/kubernetes-csi-addons v0.9.0
 )
 
 require (
